@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 from neuralresearcher.state import (
-    TopicSpec, Paper, Claim, Gap, Direction, PlanStep, ResearchPlan
+    TopicSpec, Paper, Claim, Gap, Direction, PlanStep, ResearchPlan,
+    CoverageReport, CoverageCluster, ReviewResult
 )
 from neuralresearcher.errors import SchemaError
 
@@ -32,6 +33,8 @@ class StateStore:
         with open(self.state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
+    # ---- TopicSpec ----
+
     def save_topic_spec(self, topic_spec: TopicSpec) -> None:
         state = self._read_state()
         state["topic_spec"] = topic_spec.model_dump()
@@ -44,6 +47,8 @@ class StateStore:
             return TopicSpec(**data)
         return None
 
+    # ---- Papers ----
+
     def save_papers(self, papers: List[Paper]) -> None:
         state = self._read_state()
         state["papers"] = [p.model_dump() for p in papers]
@@ -53,6 +58,35 @@ class StateStore:
         state = self._read_state()
         data = state.get("papers", [])
         return [Paper(**p) for p in data]
+
+    def update_papers(self, updated_papers: List[Paper]) -> None:
+        """Merge metadata into existing papers without overwriting the full list.
+        
+        Matches on paper.id and updates only non-empty metadata fields
+        (methods, datasets, metrics, limitations, explicit_future_work).
+        """
+        existing = self.load_papers()
+        existing_map = {p.id: p for p in existing}
+        
+        for up in updated_papers:
+            if up.id in existing_map:
+                ep = existing_map[up.id]
+                if up.methods:
+                    ep.methods = up.methods
+                if up.datasets:
+                    ep.datasets = up.datasets
+                if up.metrics:
+                    ep.metrics = up.metrics
+                if up.limitations:
+                    ep.limitations = up.limitations
+                if up.explicit_future_work:
+                    ep.explicit_future_work = up.explicit_future_work
+            else:
+                existing.append(up)
+        
+        self.save_papers(existing)
+
+    # ---- Claims ----
 
     def save_claims(self, claims: List[Claim]) -> None:
         state = self._read_state()
@@ -64,6 +98,8 @@ class StateStore:
         data = state.get("claims", [])
         return [Claim(**c) for c in data]
 
+    # ---- Gaps ----
+
     def save_gaps(self, gaps: List[Gap]) -> None:
         state = self._read_state()
         state["gaps"] = [g.model_dump() for g in gaps]
@@ -74,6 +110,8 @@ class StateStore:
         data = state.get("gaps", [])
         return [Gap(**g) for g in data]
 
+    # ---- Directions ----
+
     def save_directions(self, directions: List[Direction]) -> None:
         state = self._read_state()
         state["directions"] = [d.model_dump() for d in directions]
@@ -83,6 +121,8 @@ class StateStore:
         state = self._read_state()
         data = state.get("directions", [])
         return [Direction(**d) for d in data]
+
+    # ---- Plan + Steps ----
 
     def save_plan(self, plan: ResearchPlan, steps: List[PlanStep]) -> None:
         state = self._read_state()
@@ -97,3 +137,31 @@ class StateStore:
         plan = ResearchPlan(**plan_data) if plan_data else None
         steps = [PlanStep(**s) for s in steps_data]
         return plan, steps
+
+    # ---- Coverage Report ----
+
+    def save_coverage_report(self, report: CoverageReport) -> None:
+        state = self._read_state()
+        state["coverage_report"] = report.model_dump()
+        self._write_state(state)
+
+    def load_coverage_report(self) -> Optional[CoverageReport]:
+        state = self._read_state()
+        data = state.get("coverage_report")
+        if data:
+            return CoverageReport(**data)
+        return None
+
+    # ---- Review Result ----
+
+    def save_review_result(self, result: ReviewResult) -> None:
+        state = self._read_state()
+        state["review_result"] = result.model_dump()
+        self._write_state(state)
+
+    def load_review_result(self) -> Optional[ReviewResult]:
+        state = self._read_state()
+        data = state.get("review_result")
+        if data:
+            return ReviewResult(**data)
+        return None

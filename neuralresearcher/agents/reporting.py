@@ -9,6 +9,9 @@ def run_reporting(orchestrator: Any) -> None:
     papers = orchestrator.store.load_papers()
     gaps = orchestrator.store.load_gaps()
     directions = orchestrator.store.load_directions()
+    claims = orchestrator.store.load_claims()
+    coverage_report = orchestrator.store.load_coverage_report()
+    review_result = orchestrator.store.load_review_result()
     
     render_markdown_plan(
         plan=plan,
@@ -16,6 +19,9 @@ def run_reporting(orchestrator: Any) -> None:
         papers=papers,
         gaps=gaps,
         directions=directions,
+        claims=claims,
+        coverage_report=coverage_report,
+        review_result=review_result,
         output_path="research_plan.md"
     )
     
