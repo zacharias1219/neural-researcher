@@ -47,3 +47,37 @@ def test_store_update_papers(tmp_path: Path):
     p2_loaded = next(p for p in loaded if p.id == "2")
     assert p1_loaded.methods == ["M1"] # Should not be overwritten
     assert p2_loaded.datasets == ["D1"]
+
+def test_store_save_papers_deduplication(tmp_path: Path):
+    store = StateStore(directory=str(tmp_path))
+    p1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M1"])
+    p1_dup = Paper(id="p1", title="Title 1 Dup", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M2"], datasets=["D1"])
+    p2 = Paper(id="p2", title="Title 2", authors=[], venue="arXiv", url="http://2", abstract="abs", year=2024)
+
+    store.save_papers([p1, p1_dup, p2])
+    loaded = store.load_papers()
+    assert len(loaded) == 2
+    p1_loaded = next(p for p in loaded if p.id == "p1")
+    assert "M1" in p1_loaded.methods
+    assert "M2" in p1_loaded.methods
+    assert p1_loaded.datasets == ["D1"]
+
+def test_store_update_papers_merging(tmp_path: Path):
+    store = StateStore(directory=str(tmp_path))
+    p1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M1"])
+    store.save_papers([p1])
+
+    # First update
+    update1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M2"], datasets=["D1"])
+    store.update_papers([update1])
+
+    # Second update
+    update2 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M3"], metrics=["Acc"])
+    store.update_papers([update2])
+
+    loaded = store.load_papers()
+    p1_loaded = loaded[0]
+    assert p1_loaded.methods == ["M1", "M2", "M3"]
+    assert p1_loaded.datasets == ["D1"]
+    assert p1_loaded.metrics == ["Acc"]
+

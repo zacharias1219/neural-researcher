@@ -1,11 +1,15 @@
-from typing import Any
+import hashlib
 import json
 import uuid
+
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import Direction
 from neuralresearcher.llm import call_llm
+from neuralresearcher.errors import SchemaError, WorkflowError
 
-def run_directions(orchestrator: Any) -> None:
-    gaps = orchestrator.store.load_gaps()
+
+def run_directions(context: AgentContext) -> None:
+    gaps = context.store.load_gaps()
     if not gaps:
         return
         
@@ -25,19 +29,27 @@ def run_directions(orchestrator: Any) -> None:
     ]
     
     response = call_llm(
-        config=orchestrator.config,
+        config=context.config,
         messages=messages,
         response_format={"type": "json_object"},
-        store=orchestrator.store,
-        task_id=orchestrator.task_id,
+        store=context.store,
+        task_id=context.task_id,
         agent_name="directions"
     )
     
     all_directions = []
     try:
         data = json.loads(response.content)
-        for d in data.get("directions", []):
-            d['id'] = f"dir_{uuid.uuid4().hex[:8]}"
+        raw_dirs = data.get("directions", [])
+        if not raw_dirs:
+            raise SchemaError("Directions response contained empty 'directions' list.")
+            
+        for idx, d in enumerate(raw_dirs):
+            if context.config.seed is not None:
+                d['id'] = f"dir_{hashlib.sha1(f'{context.topic}_{context.config.seed}_dir_{idx}'.encode()).hexdigest()[:8]}"
+            else:
+                d['id'] = f"dir_{uuid.uuid4().hex[:8]}"
+                
             if 'primary_gap_id' not in d:
                 d['primary_gap_id'] = gaps[0].id if gaps else "unknown"
             d.setdefault('hypothesis', 'Unspecified hypothesis')
@@ -46,7 +58,6 @@ def run_directions(orchestrator: Any) -> None:
             d['novelty_assessment'] = d.get('novelty_assessment', 'medium')
             all_directions.append(Direction(**d))
     except Exception as e:
-        from neuralresearcher.logging import log_error
-        log_error(f"Error parsing directions: {e}")
+        raise SchemaError(f"Failed to parse directions: {e}")
         
-    orchestrator.store.save_directions(all_directions)
+    context.store.save_directions(all_directions)

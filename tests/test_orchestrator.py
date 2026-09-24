@@ -1,20 +1,21 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
+from neuralresearcher.context import AgentContext
 from neuralresearcher.config import Config
 from neuralresearcher.io.store import StateStore
-from neuralresearcher.state import TopicSpec, Paper, CoverageReport, CoverageCluster
+from neuralresearcher.state import TopicSpec, Paper, CoverageReport, CoverageCluster, ReviewResult
 from neuralresearcher.errors import WorkflowError
 
-@patch("neuralresearcher.agents.topic_scope.run_topic_scope")
-@patch("neuralresearcher.agents.retrieval.run_retrieval")
-@patch("neuralresearcher.agents.reading.run_reading")
-@patch("neuralresearcher.agents.coverage.run_coverage")
-@patch("neuralresearcher.agents.gaps.run_gaps")
-@patch("neuralresearcher.agents.directions.run_directions")
-@patch("neuralresearcher.agents.planner.run_planner")
-@patch("neuralresearcher.agents.reviewer.run_reviewer")
-@patch("neuralresearcher.agents.reporting.run_reporting")
+@patch("neuralresearcher.orchestrator.run_topic_scope")
+@patch("neuralresearcher.orchestrator.run_retrieval")
+@patch("neuralresearcher.orchestrator.run_reading")
+@patch("neuralresearcher.orchestrator.run_coverage")
+@patch("neuralresearcher.orchestrator.run_gaps")
+@patch("neuralresearcher.orchestrator.run_directions")
+@patch("neuralresearcher.orchestrator.run_planner")
+@patch("neuralresearcher.orchestrator.run_reviewer")
+@patch("neuralresearcher.orchestrator.run_reporting")
 def test_orchestrator_state_transitions(
     mock_reporting, mock_reviewer, mock_planner, mock_directions, mock_gaps, mock_coverage, mock_reading, mock_retrieval, mock_topic_scope, tmp_path
 ):
@@ -34,22 +35,76 @@ def test_orchestrator_state_transitions(
     ])
     store.save_coverage_report(CoverageReport(id="r1", clusters=[CoverageCluster(domain="ML")], warnings=[]))
 
+    # Reviewer passes by default
+    store.save_review_result(ReviewResult(id="rev1", passed=True, issues=[], suggestions=[]))
+
     # Run the orchestrator
     orchestrator.run()
     
-    # Assert all agents were called in order
-    mock_topic_scope.assert_called_once_with(orchestrator)
-    mock_retrieval.assert_called_once_with(orchestrator)
-    mock_reading.assert_called_once_with(orchestrator)
-    mock_coverage.assert_called_once_with(orchestrator)
-    mock_gaps.assert_called_once_with(orchestrator)
-    mock_directions.assert_called_once_with(orchestrator)
-    mock_planner.assert_called_once_with(orchestrator)
-    mock_reviewer.assert_called_once_with(orchestrator)
-    mock_reporting.assert_called_once_with(orchestrator)
+    # Assert all agents were called with AgentContext
+    for mock_agent in [
+        mock_topic_scope, mock_retrieval, mock_reading, mock_coverage,
+        mock_gaps, mock_directions, mock_planner, mock_reviewer, mock_reporting
+    ]:
+        mock_agent.assert_called_once()
+        ctx = mock_agent.call_args[0][0]
+        assert isinstance(ctx, AgentContext)
+        assert ctx.topic == "test"
+        assert ctx.task_id == "test_task"
     
     # Assert final state
     assert orchestrator.state == OrchestratorState.REPORT_READY
+
+
+def test_orchestrator_reviewer_retry_loop(tmp_path):
+    store = StateStore(directory=str(tmp_path))
+    config = Config(max_retries=2, strict_mode=True)
+    orchestrator = Orchestrator(topic="test", config=config, store=store, task_id="test_task")
+    orchestrator.set_state(OrchestratorState.DIRECTIONS_PROPOSED)
+
+    call_count = 0
+    feedback_seen = []
+
+    def fake_planner(ctx: AgentContext):
+        nonlocal feedback_seen
+        feedback_seen.append(ctx.review_feedback)
+
+    def fake_reviewer(ctx: AgentContext):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # First attempt fails
+            store.save_review_result(ReviewResult(id="rev1", passed=False, issues=["Missing ablation steps"], suggestions=[]))
+        else:
+            # Second attempt passes
+            store.save_review_result(ReviewResult(id="rev2", passed=True, issues=[], suggestions=[]))
+
+    with patch("neuralresearcher.orchestrator.run_planner", side_effect=fake_planner), \
+         patch("neuralresearcher.orchestrator.run_reviewer", side_effect=fake_reviewer), \
+         patch("neuralresearcher.orchestrator.run_reporting"):
+        orchestrator.run()
+
+    assert call_count == 2
+    assert feedback_seen[0] is None  # Initial attempt has no feedback
+    assert "Missing ablation steps" in feedback_seen[1]  # Second attempt got feedback
+    assert orchestrator.state == OrchestratorState.REPORT_READY
+
+
+def test_orchestrator_reviewer_retry_exhausted_strict_mode(tmp_path):
+    store = StateStore(directory=str(tmp_path))
+    config = Config(max_retries=2, strict_mode=True)
+    orchestrator = Orchestrator(topic="test", config=config, store=store, task_id="test_task")
+    orchestrator.set_state(OrchestratorState.DIRECTIONS_PROPOSED)
+
+    def fake_reviewer(ctx: AgentContext):
+        store.save_review_result(ReviewResult(id="rev_fail", passed=False, issues=["Persistent issue"], suggestions=[]))
+
+    with patch("neuralresearcher.orchestrator.run_planner"), \
+         patch("neuralresearcher.orchestrator.run_reviewer", side_effect=fake_reviewer):
+        orchestrator.run()
+
+    # In strict mode, exhausting retries should transition to HALTED
+    assert orchestrator.state == OrchestratorState.HALTED
 
 
 def test_guardrail_layer_1_topic_validation(tmp_path):

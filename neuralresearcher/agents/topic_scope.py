@@ -1,11 +1,13 @@
+import hashlib
 import json
 import uuid
-from typing import Any
-
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import TopicSpec
 from neuralresearcher.llm import call_llm
+from neuralresearcher.errors import SchemaError
 
-def run_topic_scope(orchestrator: Any) -> None:
+
+def run_topic_scope(context: AgentContext) -> None:
     system_prompt = (
         "You are a specialized agent that takes a raw research topic and outputs a refined TopicSpec. "
         "Return a JSON object strictly matching this schema:\n"
@@ -15,32 +17,34 @@ def run_topic_scope(orchestrator: Any) -> None:
         "  \"keywords\": [\"string\"]\n"
         "}"
     )
-    user_prompt = f"Raw Topic: {orchestrator.topic}"
+    user_prompt = f"Raw Topic: {context.topic}"
     
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
     
-    # We pass the schema of TopicSpec as response format
-    # For a real Groq call we might need a precise JSON schema object here
     response_format = {"type": "json_object"} 
     
     response = call_llm(
-        config=orchestrator.config,
+        config=context.config,
         messages=messages,
         response_format=response_format,
-        store=orchestrator.store,
-        task_id=orchestrator.task_id,
+        store=context.store,
+        task_id=context.task_id,
         agent_name="topic_scope"
     )
     
     try:
         data = json.loads(response.content)
-        data['id'] = f"topic_{uuid.uuid4().hex[:8]}"
-        data['raw_topic'] = orchestrator.topic
+        import hashlib
+        if context.config.seed is not None:
+            data['id'] = f"topic_{hashlib.sha1(f'{context.topic}_{context.config.seed}'.encode()).hexdigest()[:8]}"
+        else:
+            data['id'] = f"topic_{uuid.uuid4().hex[:8]}"
+        data['raw_topic'] = context.topic
         topic_spec = TopicSpec(**data)
-        orchestrator.store.save_topic_spec(topic_spec)
+        context.store.save_topic_spec(topic_spec)
     except Exception as e:
-        from neuralresearcher.errors import SchemaError
         raise SchemaError(f"Failed to parse TopicSpec: {str(e)}")
+

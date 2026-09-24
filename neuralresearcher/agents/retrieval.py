@@ -1,14 +1,16 @@
-from typing import Any
 import json
+from neuralresearcher.context import AgentContext
 from neuralresearcher.llm import call_llm
 from neuralresearcher.tools import TOOL_SCHEMAS, execute_tool_call
 from neuralresearcher.state import Paper
-from neuralresearcher.errors import ToolError
+from neuralresearcher.errors import ToolError, WorkflowError
+from neuralresearcher.logging import log_error
 
-def run_retrieval(orchestrator: Any) -> None:
-    topic_spec = orchestrator.store.load_topic_spec()
+
+def run_retrieval(context: AgentContext) -> None:
+    topic_spec = context.store.load_topic_spec()
     if not topic_spec:
-        raise ValueError("TopicSpec not found in store.")
+        raise WorkflowError("TopicSpec not found in store.")
         
     system_prompt = "You are a retrieval agent. Use the search_papers tool to find papers."
     user_prompt = (
@@ -24,11 +26,11 @@ def run_retrieval(orchestrator: Any) -> None:
     ]
     
     response = call_llm(
-        config=orchestrator.config,
+        config=context.config,
         messages=messages,
         tools=[s for s in TOOL_SCHEMAS if s["function"]["name"] == "search_papers"],
-        store=orchestrator.store,
-        task_id=orchestrator.task_id,
+        store=context.store,
+        task_id=context.task_id,
         agent_name="retrieval"
     )
     
@@ -39,7 +41,6 @@ def run_retrieval(orchestrator: Any) -> None:
                 args, result_json = execute_tool_call(tc)
                 papers_data.extend(json.loads(result_json))
             except ToolError as e:
-                from neuralresearcher.logging import log_error
                 log_error(str(e))
                 
     papers = []
@@ -55,4 +56,4 @@ def run_retrieval(orchestrator: Any) -> None:
         )
         papers.append(paper)
         
-    orchestrator.store.save_papers(papers)
+    context.store.save_papers(papers)

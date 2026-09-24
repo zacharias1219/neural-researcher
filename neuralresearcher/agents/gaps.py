@@ -1,12 +1,17 @@
-from typing import Any
+import hashlib
 import json
 import uuid
+
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import Gap
 from neuralresearcher.llm import call_llm
+from neuralresearcher.errors import SchemaError, WorkflowError
+from neuralresearcher.logging import log_info, log_error
 
-def run_gaps(orchestrator: Any) -> None:
-    claims = orchestrator.store.load_claims()
-    papers = orchestrator.store.load_papers()
+
+def run_gaps(context: AgentContext) -> None:
+    claims = context.store.load_claims()
+    papers = context.store.load_papers()
     if not claims:
         return
     
@@ -63,19 +68,27 @@ def run_gaps(orchestrator: Any) -> None:
     ]
     
     response = call_llm(
-        config=orchestrator.config,
+        config=context.config,
         messages=messages,
         response_format={"type": "json_object"},
-        store=orchestrator.store,
-        task_id=orchestrator.task_id,
+        store=context.store,
+        task_id=context.task_id,
         agent_name="gaps"
     )
     
     all_gaps = []
     try:
         data = json.loads(response.content)
-        for g in data.get("gaps", []):
-            g['id'] = f"gap_{uuid.uuid4().hex[:8]}"
+        raw_gaps = data.get("gaps", [])
+        if not raw_gaps:
+            raise SchemaError("Gaps response contained empty 'gaps' list.")
+            
+        for idx, g in enumerate(raw_gaps):
+            if context.config.seed is not None:
+                g['id'] = f"gap_{hashlib.sha1(f'{context.topic}_{context.config.seed}_gap_{idx}'.encode()).hexdigest()[:8]}"
+            else:
+                g['id'] = f"gap_{uuid.uuid4().hex[:8]}"
+                
             g['gap_type'] = g.get('gap_type', 'unexplored_axis')
             g['novelty_estimate'] = g.get('novelty_estimate', 'medium')
             g.setdefault('description', 'Unspecified gap')
@@ -85,7 +98,6 @@ def run_gaps(orchestrator: Any) -> None:
             raw_paper_ids = g.pop('related_paper_ids', [])
             g['related_papers'] = [pid for pid in raw_paper_ids if pid in valid_paper_ids]
             if len(g['related_papers']) < len(raw_paper_ids):
-                from neuralresearcher.logging import log_info
                 dropped = len(raw_paper_ids) - len(g['related_papers'])
                 log_info(f"Gap '{g['description'][:40]}...': dropped {dropped} invalid paper ID(s)")
             
@@ -93,15 +105,13 @@ def run_gaps(orchestrator: Any) -> None:
             raw_claim_ids = g.pop('supporting_claim_ids', [])
             g['supporting_claims'] = [cid for cid in raw_claim_ids if cid in valid_claim_ids]
             if len(g['supporting_claims']) < len(raw_claim_ids):
-                from neuralresearcher.logging import log_info
                 dropped = len(raw_claim_ids) - len(g['supporting_claims'])
                 log_info(f"Gap '{g['description'][:40]}...': dropped {dropped} invalid claim ID(s)")
             
             g.setdefault('dimensions', {})
-            
             all_gaps.append(Gap(**g))
+            
     except Exception as e:
-        from neuralresearcher.logging import log_error
-        log_error(f"Error parsing gaps: {e}")
+        raise SchemaError(f"Failed to parse gaps: {e}")
         
-    orchestrator.store.save_gaps(all_gaps)
+    context.store.save_gaps(all_gaps)

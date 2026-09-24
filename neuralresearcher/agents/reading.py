@@ -1,11 +1,15 @@
-from typing import Any
+import hashlib
 import json
+import uuid
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import Paper, Claim
 from neuralresearcher.llm import call_llm
-import uuid
+from neuralresearcher.errors import SchemaError
+from neuralresearcher.logging import log_error
 
-def run_reading(orchestrator: Any) -> None:
-    papers = orchestrator.store.load_papers()
+
+def run_reading(context: AgentContext) -> None:
+    papers = context.store.load_papers()
     if not papers:
         return
         
@@ -53,11 +57,11 @@ def run_reading(orchestrator: Any) -> None:
         ]
         
         response = call_llm(
-            config=orchestrator.config,
+            config=context.config,
             messages=messages,
             response_format={"type": "json_object"},
-            store=orchestrator.store,
-            task_id=orchestrator.task_id,
+            store=context.store,
+            task_id=context.task_id,
             agent_name="reading"
         )
         
@@ -67,19 +71,23 @@ def run_reading(orchestrator: Any) -> None:
             # --- Enrich paper metadata ---
             meta = data.get("paper_metadata", {})
             if meta.get("methods"):
-                paper.methods = meta["methods"]
+                paper.methods = list(dict.fromkeys(paper.methods + meta["methods"]))
             if meta.get("datasets"):
-                paper.datasets = meta["datasets"]
+                paper.datasets = list(dict.fromkeys(paper.datasets + meta["datasets"]))
             if meta.get("metrics"):
-                paper.metrics = meta["metrics"]
+                paper.metrics = list(dict.fromkeys(paper.metrics + meta["metrics"]))
             if meta.get("limitations"):
-                paper.limitations = meta["limitations"]
+                paper.limitations = list(dict.fromkeys(paper.limitations + meta["limitations"]))
             if meta.get("explicit_future_work"):
-                paper.explicit_future_work = meta["explicit_future_work"]
+                paper.explicit_future_work = list(dict.fromkeys(paper.explicit_future_work + meta["explicit_future_work"]))
             
             # --- Extract claims ---
-            for c in data.get("claims", []):
-                c['id'] = f"claim_{uuid.uuid4().hex[:8]}"
+            for idx, c in enumerate(data.get("claims", [])):
+                if context.config.seed is not None:
+                    claim_id = f"claim_{hashlib.sha1(f'{paper.id}_{context.config.seed}_{idx}'.encode()).hexdigest()[:8]}"
+                else:
+                    claim_id = f"claim_{uuid.uuid4().hex[:8]}"
+                c['id'] = claim_id
                 c['paper_id'] = paper.id
                 c['evidence_ref'] = paper.url
                 c.setdefault('section', 'abstract')
@@ -87,13 +95,13 @@ def run_reading(orchestrator: Any) -> None:
                 c.setdefault('datasets', [])
                 c.setdefault('metrics', [])
                 all_claims.append(Claim(**c))
+
                 
         except Exception as e:
-            from neuralresearcher.logging import log_error
-            log_error(f"Error parsing reading output for '{paper.title}': {e}")
+            raise SchemaError(f"Failed to parse reading output for '{paper.title}': {e}")
         
         updated_papers.append(paper)
     
     # Save enriched papers back to store
-    orchestrator.store.save_papers(updated_papers)
-    orchestrator.store.save_claims(all_claims)
+    context.store.update_papers(updated_papers)
+    context.store.save_claims(all_claims)

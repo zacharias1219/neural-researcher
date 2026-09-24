@@ -1,9 +1,11 @@
-from typing import Any
+import hashlib
 import uuid
 from datetime import datetime, timezone
+from typing import Dict, List
 
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import CoverageCluster, CoverageReport
-from neuralresearcher.logging import log_info, log_info as log_warning
+from neuralresearcher.logging import log_info, log_warning
 
 # Fixed domain taxonomy for keyword-based clustering
 DOMAIN_TAXONOMY = {
@@ -59,28 +61,28 @@ def _classify_paper(paper, taxonomy: dict) -> list[str]:
     return matched_domains if matched_domains else ["uncategorized"]
 
 
-def run_coverage(orchestrator: Any) -> None:
-    papers = orchestrator.store.load_papers()
-    claims = orchestrator.store.load_claims()
+def run_coverage(context: AgentContext) -> None:
+    papers = context.store.load_papers()
+    claims = context.store.load_claims()
     
     if not papers:
         log_info("Coverage agent: no papers to cluster.")
         return
     
     # --- Cluster papers by domain ---
-    domain_to_papers: dict[str, list[str]] = {}
+    domain_to_papers: Dict[str, List[str]] = {}
     for paper in papers:
         domains = _classify_paper(paper, DOMAIN_TAXONOMY)
         for domain in domains:
             domain_to_papers.setdefault(domain, []).append(paper.id)
     
     # --- Count claims per domain ---
-    paper_id_to_domains: dict[str, list[str]] = {}
+    paper_id_to_domains: Dict[str, List[str]] = {}
     for domain, pids in domain_to_papers.items():
         for pid in pids:
             paper_id_to_domains.setdefault(pid, []).append(domain)
     
-    domain_claim_counts: dict[str, int] = {}
+    domain_claim_counts: Dict[str, int] = {}
     for claim in claims:
         domains_for_paper = paper_id_to_domains.get(claim.paper_id, ["uncategorized"])
         for d in domains_for_paper:
@@ -91,7 +93,7 @@ def run_coverage(orchestrator: Any) -> None:
     for domain, paper_ids in sorted(domain_to_papers.items()):
         clusters.append(CoverageCluster(
             domain=domain,
-            paper_ids=list(set(paper_ids)),  # deduplicate
+            paper_ids=sorted(list(set(paper_ids))),  # deduplicate and sort
             claim_count=domain_claim_counts.get(domain, 0)
         ))
     
@@ -106,7 +108,7 @@ def run_coverage(orchestrator: Any) -> None:
         warnings.append(f"No papers cover the '{domain}' domain — literature coverage may be incomplete.")
     
     # Check for thin coverage
-    for domain, paper_ids in domain_to_papers.items():
+    for domain, paper_ids in sorted(domain_to_papers.items()):
         if domain != "uncategorized" and len(set(paper_ids)) < 2:
             warnings.append(f"Only {len(set(paper_ids))} paper(s) in '{domain}' domain — coverage may be thin.")
     
@@ -122,15 +124,23 @@ def run_coverage(orchestrator: Any) -> None:
     if uncategorized_count > 0:
         warnings.append(f"{uncategorized_count} paper(s) could not be assigned to any domain.")
     
+    # Deterministic ID & timestamp if seed is set
+    if context.config.seed is not None:
+        report_id = f"coverage_{hashlib.sha1(f'{context.topic}_{context.config.seed}_cov'.encode()).hexdigest()[:8]}"
+        timestamp = "2024-01-01T00:00:00+00:00"
+    else:
+        report_id = f"coverage_{uuid.uuid4().hex[:8]}"
+        timestamp = datetime.now(timezone.utc).isoformat()
+
     # --- Build and save report ---
     report = CoverageReport(
-        id=f"coverage_{uuid.uuid4().hex[:8]}",
+        id=report_id,
         clusters=clusters,
         warnings=warnings,
-        timestamp=datetime.now(timezone.utc).isoformat()
+        timestamp=timestamp
     )
     
-    orchestrator.store.save_coverage_report(report)
+    context.store.save_coverage_report(report)
     
     log_info(f"Coverage agent: {len(clusters)} domain cluster(s), {len(warnings)} warning(s).")
     for w in warnings:

@@ -109,6 +109,10 @@ def _call_openai_compatible(client, config: Config, messages, tools, response_fo
                 if attempt < config.max_retries:
                     time.sleep(2 ** attempt + 2)
                     continue
+            # If provider does not support type: json_schema, fallback to json_object
+            if "json_schema" in err_msg.lower() and isinstance(kwargs.get("response_format"), dict) and kwargs["response_format"].get("type") == "json_schema":
+                kwargs["response_format"] = {"type": "json_object"}
+                continue
             raise LLMError(f"Error calling LLM API ({config.provider.value}): {err_msg}")
 
     if response is None:
@@ -146,10 +150,6 @@ def _call_anthropic(client, config: Config, messages, tools, response_format):
         else:
             user_messages.append(m)
 
-    # If response_format asks for JSON, append an instruction.
-    if response_format and response_format.get("type") == "json_object":
-        system_text += "\nIMPORTANT: Reply with valid JSON only. No markdown fences."
-
     kwargs: Dict[str, Any] = {
         "model": config.model_name,
         "messages": user_messages,
@@ -157,12 +157,10 @@ def _call_anthropic(client, config: Config, messages, tools, response_format):
         "temperature": config.temperature,
         "top_p": config.top_p,
     }
-    if system_text.strip():
-        kwargs["system"] = system_text.strip()
 
     # Convert tools to Anthropic schema
+    anthropic_tools = []
     if tools:
-        anthropic_tools = []
         for t in tools:
             fn = t["function"]
             anthropic_tools.append({
@@ -170,7 +168,28 @@ def _call_anthropic(client, config: Config, messages, tools, response_format):
                 "description": fn.get("description", ""),
                 "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
             })
+
+    # If structured output schema is requested, enforce it via Anthropic tool use
+    structured_tool_name = None
+    if response_format:
+        if response_format.get("type") == "json_schema":
+            js = response_format.get("json_schema", {})
+            structured_tool_name = js.get("name", "structured_output")
+            schema = js.get("schema", {"type": "object"})
+            anthropic_tools.append({
+                "name": structured_tool_name,
+                "description": "Provide the final structured JSON response matching the schema.",
+                "input_schema": schema,
+            })
+            kwargs["tool_choice"] = {"type": "tool", "name": structured_tool_name}
+        elif response_format.get("type") == "json_object":
+            system_text += "\nIMPORTANT: Reply with valid JSON only. No markdown fences."
+
+    if anthropic_tools:
         kwargs["tools"] = anthropic_tools
+
+    if system_text.strip():
+        kwargs["system"] = system_text.strip()
 
     response = None
     for attempt in range(config.max_retries + 1):
@@ -195,10 +214,13 @@ def _call_anthropic(client, config: Config, messages, tools, response_format):
         if block.type == "text":
             content_text += block.text
         elif block.type == "tool_use":
-            parsed_tool_calls.append(ToolCall(
-                id=block.id,
-                function={"name": block.name, "arguments": json.dumps(block.input)},
-            ))
+            if structured_tool_name and block.name == structured_tool_name:
+                content_text = json.dumps(block.input)
+            else:
+                parsed_tool_calls.append(ToolCall(
+                    id=block.id,
+                    function={"name": block.name, "arguments": json.dumps(block.input)},
+                ))
 
     usage = Usage(
         prompt_tokens=response.usage.input_tokens,

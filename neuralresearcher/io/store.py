@@ -52,7 +52,19 @@ class StateStore:
 
     def save_papers(self, papers: List[Paper]) -> None:
         state = self._read_state()
-        state["papers"] = [p.model_dump() for p in papers]
+        deduped: Dict[str, Paper] = {}
+        list_fields = ["methods", "datasets", "metrics", "limitations", "explicit_future_work", "citations"]
+        for p in papers:
+            if p.id not in deduped:
+                deduped[p.id] = p.model_copy() if hasattr(p, "model_copy") else p
+            else:
+                ep = deduped[p.id]
+                for fld in list_fields:
+                    p_val = getattr(p, fld, []) or []
+                    if p_val:
+                        ep_val = getattr(ep, fld, []) or []
+                        setattr(ep, fld, list(dict.fromkeys(ep_val + p_val)))
+        state["papers"] = [p.model_dump() for p in deduped.values()]
         self._write_state(state)
 
     def load_papers(self) -> List[Paper]:
@@ -63,25 +75,21 @@ class StateStore:
     def update_papers(self, updated_papers: List[Paper]) -> None:
         """Merge metadata into existing papers without overwriting the full list.
         
-        Matches on paper.id and updates only non-empty metadata fields
-        (methods, datasets, metrics, limitations, explicit_future_work).
+        Matches on paper.id and merges metadata fields
+        (methods, datasets, metrics, limitations, explicit_future_work, citations).
         """
         existing = self.load_papers()
         existing_map = {p.id: p for p in existing}
+        list_fields = ["methods", "datasets", "metrics", "limitations", "explicit_future_work", "citations"]
         
         for up in updated_papers:
             if up.id in existing_map:
                 ep = existing_map[up.id]
-                if up.methods:
-                    ep.methods = up.methods
-                if up.datasets:
-                    ep.datasets = up.datasets
-                if up.metrics:
-                    ep.metrics = up.metrics
-                if up.limitations:
-                    ep.limitations = up.limitations
-                if up.explicit_future_work:
-                    ep.explicit_future_work = up.explicit_future_work
+                for fld in list_fields:
+                    up_val = getattr(up, fld, []) or []
+                    if up_val:
+                        ep_val = getattr(ep, fld, []) or []
+                        setattr(ep, fld, list(dict.fromkeys(ep_val + up_val)))
             else:
                 existing.append(up)
         

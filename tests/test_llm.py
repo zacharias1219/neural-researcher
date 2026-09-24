@@ -159,3 +159,39 @@ def test_anthropic_tool_use(mock_get_client):
     assert len(response.tool_calls) == 1
     assert response.tool_calls[0].function["name"] == "search_papers"
     assert response.content is None  # No text blocks
+
+
+@patch("neuralresearcher.llm._get_anthropic_client")
+def test_anthropic_structured_output_json_schema(mock_get_client):
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+
+    tool_block = MagicMock()
+    tool_block.type = "tool_use"
+    tool_block.id = "toolu_schema_1"
+    tool_block.name = "structured_output"
+    tool_block.input = {"domain": "ML", "subfields": ["NLP"]}
+
+    mock_client.messages.create.return_value = MagicMock(
+        content=[tool_block],
+        usage=MagicMock(input_tokens=15, output_tokens=25),
+    )
+
+    config = Config(provider=LLMProvider.ANTHROPIC, model_name="claude-sonnet-4-20250514")
+    response = call_llm(
+        config=config,
+        messages=[{"role": "user", "content": "analyze"}],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_output",
+                "schema": {"type": "object", "properties": {"domain": {"type": "string"}}},
+            },
+        },
+    )
+
+    # Tool call should be converted to content text (not external tool calls)
+    assert response.content == '{"domain": "ML", "subfields": ["NLP"]}'
+    assert len(response.tool_calls) == 0
+    assert response.usage.total_tokens == 40
+

@@ -1,21 +1,26 @@
-from typing import Any
+import hashlib
 import json
+import re
 import uuid
+
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import ResearchPlan, PlanStep
 from neuralresearcher.llm import call_llm
+from neuralresearcher.errors import SchemaError, WorkflowError
 
-def run_planner(orchestrator: Any) -> None:
-    directions = orchestrator.store.load_directions()
+
+def run_planner(context: AgentContext) -> None:
+    directions = context.store.load_directions()
     if not directions:
         return
         
     direction = directions[0]  # Pick the top-ranked direction
     
     # Gather rich context from the store
-    papers = orchestrator.store.load_papers()
-    claims = orchestrator.store.load_claims()
-    gaps = orchestrator.store.load_gaps()
-    coverage_report = orchestrator.store.load_coverage_report()
+    papers = context.store.load_papers()
+    claims = context.store.load_claims()
+    gaps = context.store.load_gaps()
+    coverage_report = context.store.load_coverage_report()
     
     # Build context blocks for the prompt
     papers_block = "\n".join([
@@ -42,6 +47,14 @@ def run_planner(orchestrator: Any) -> None:
         f"- [{c.type}] {c.text} (from {c.paper_id})"
         for c in claims[:15]  # limit for context window
     ])
+
+    feedback_block = ""
+    if context.review_feedback:
+        feedback_block = (
+            f"\n\nIMPORTANT - PREVIOUS PLAN REVIEW FEEDBACK TO FIX:\n"
+            f"{context.review_feedback}\n"
+            f"You must revise the plan to address every single issue and suggestion listed above.\n"
+        )
 
     system_prompt = (
         "You are a research planner agent. Create a DETAILED, EXECUTABLE research plan.\n\n"
@@ -92,6 +105,7 @@ def run_planner(orchestrator: Any) -> None:
         f"Identified Gaps:\n{gaps_block}\n\n"
         f"Key Claims:\n{claims_block}\n"
         f"{coverage_warnings}"
+        f"{feedback_block}"
     )
     
     messages = [
@@ -100,11 +114,11 @@ def run_planner(orchestrator: Any) -> None:
     ]
     
     response = call_llm(
-        config=orchestrator.config,
+        config=context.config,
         messages=messages,
         response_format={"type": "json_object"},
-        store=orchestrator.store,
-        task_id=orchestrator.task_id,
+        store=context.store,
+        task_id=context.task_id,
         agent_name="planner"
     )
     
@@ -112,12 +126,18 @@ def run_planner(orchestrator: Any) -> None:
         data = json.loads(response.content)
         p_data = data.get("plan", {})
         
-        plan_id = f"plan_{uuid.uuid4().hex[:8]}"
+        if context.config.seed is not None:
+            plan_id = f"plan_{hashlib.sha1(f'{context.topic}_{context.config.seed}_plan'.encode()).hexdigest()[:8]}"
+        else:
+            plan_id = f"plan_{uuid.uuid4().hex[:8]}"
+        
+        topic_spec = context.store.load_topic_spec()
+        topic_spec_id = topic_spec.id if topic_spec else ""
         
         # Build the plan with all fields
         plan = ResearchPlan(
             id=plan_id,
-            topic_spec_id=orchestrator.store.load_topic_spec().id,
+            topic_spec_id=topic_spec_id,
             hypothesis=p_data.get('hypothesis', direction.hypothesis),
             expected_contribution=p_data.get('expected_contribution', direction.expected_contribution_type),
             primary_gap_ids=p_data.get('primary_gap_ids', [direction.primary_gap_id]),
@@ -127,10 +147,12 @@ def run_planner(orchestrator: Any) -> None:
         
         # Parse steps with full metadata
         s_data = data.get("steps", [])
+        if not s_data:
+            raise SchemaError("Planner response contained no steps.")
+            
         parsed_steps = []
         for i, s in enumerate(s_data):
             step_id = f"step_{(i + 1):02d}"
-            import re
             
             # Sanitize dependencies (e.g., if LLM writes "step_01_collect_data", extract "step_01")
             raw_deps = s.get('dependencies', [])
@@ -170,9 +192,7 @@ def run_planner(orchestrator: Any) -> None:
         # Store step IDs in plan
         plan.steps = [s.id for s in parsed_steps]
             
-        orchestrator.store.save_plan(plan, parsed_steps)
+        context.store.save_plan(plan, parsed_steps)
         
     except Exception as e:
-        from neuralresearcher.logging import log_error
-        log_error(f"Failed to parse plan: {e}")
-        return
+        raise SchemaError(f"Failed to parse plan: {e}")

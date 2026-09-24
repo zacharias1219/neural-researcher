@@ -1,14 +1,15 @@
-from typing import Any
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
+from neuralresearcher.context import AgentContext
 from neuralresearcher.state import ReviewResult
-from neuralresearcher.logging import log_info, log_error
+from neuralresearcher.logging import log_info
 from neuralresearcher.errors import WorkflowError
 
 
-def run_reviewer(orchestrator: Any) -> None:
-    plan, steps = orchestrator.store.load_plan()
+def run_reviewer(context: AgentContext) -> None:
+    plan, steps = context.store.load_plan()
     if not plan:
         log_info("Reviewer: no plan found to review.")
         return
@@ -108,15 +109,22 @@ def run_reviewer(orchestrator: Any) -> None:
     
     # --- Build result ---
     passed = len(issues) == 0
+    if context.config.seed is not None:
+        review_id = f"review_{hashlib.sha1(f'{context.topic}_{context.config.seed}_review'.encode()).hexdigest()[:8]}"
+        timestamp = "2024-01-01T00:00:00+00:00"
+    else:
+        review_id = f"review_{uuid.uuid4().hex[:8]}"
+        timestamp = datetime.now(timezone.utc).isoformat()
+
     result = ReviewResult(
-        id=f"review_{uuid.uuid4().hex[:8]}",
+        id=review_id,
         passed=passed,
         issues=issues,
         suggestions=suggestions,
-        timestamp=datetime.now(timezone.utc).isoformat()
+        timestamp=timestamp
     )
     
-    orchestrator.store.save_review_result(result)
+    context.store.save_review_result(result)
     
     # Log summary
     if passed:
@@ -127,10 +135,11 @@ def run_reviewer(orchestrator: Any) -> None:
             log_info(f"  [x] {issue}")
     for sug in suggestions:
         log_info(f"  [!] {sug}")
-    
-    # In strict mode, halt on failure
-    if not passed and orchestrator.config.strict_mode:
+
+    # In strict mode, raise WorkflowError on failure
+    if not passed and getattr(context.config, "strict_mode", False):
         raise WorkflowError(
             f"Reviewer rejected the plan with {len(issues)} issue(s). "
             "Fix issues or disable --strict mode."
         )
+
