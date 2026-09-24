@@ -19,6 +19,7 @@ class StateStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         (self.directory / "papers").mkdir(parents=True, exist_ok=True)
         (self.directory / "analysis").mkdir(parents=True, exist_ok=True)
+        (self.directory / "transcripts").mkdir(parents=True, exist_ok=True)
         
     def _read_state(self) -> Dict[str, Any]:
         if not self.state_file.exists():
@@ -165,3 +166,32 @@ class StateStore:
         if data:
             return ReviewResult(**data)
         return None
+
+    # ---- Transcripts ----
+
+    def save_transcript(self, task_id: str, agent_name: str, messages: List[Dict[str, Any]], usage: Dict[str, Any], assistant_response: Optional[Dict[str, Any]] = None) -> None:
+        import time
+        transcript_file = self.directory / "transcripts" / f"{task_id}.jsonl"
+        entry = {
+            "timestamp": time.time(),
+            "agent_name": agent_name,
+            "messages": messages,
+            "usage": usage,
+        }
+        if assistant_response:
+            entry["assistant_response"] = assistant_response
+            
+        with open(transcript_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+            
+    def load_transcripts(self, task_id: str) -> List[Dict[str, Any]]:
+        transcript_file = self.directory / "transcripts" / f"{task_id}.jsonl"
+        if not transcript_file.exists():
+            return []
+            
+        transcripts = []
+        with open(transcript_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    transcripts.append(json.loads(line))
+        return transcripts

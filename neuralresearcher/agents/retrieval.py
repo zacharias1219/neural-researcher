@@ -26,7 +26,10 @@ def run_retrieval(orchestrator: Any) -> None:
     response = call_llm(
         config=orchestrator.config,
         messages=messages,
-        tools=[s for s in TOOL_SCHEMAS if s["function"]["name"] == "search_papers"]
+        tools=[s for s in TOOL_SCHEMAS if s["function"]["name"] == "search_papers"],
+        store=orchestrator.store,
+        task_id=orchestrator.task_id,
+        agent_name="retrieval"
     )
     
     papers_data = []

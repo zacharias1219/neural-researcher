@@ -102,7 +102,10 @@ def run_planner(orchestrator: Any) -> None:
     response = call_llm(
         config=orchestrator.config,
         messages=messages,
-        response_format={"type": "json_object"}
+        response_format={"type": "json_object"},
+        store=orchestrator.store,
+        task_id=orchestrator.task_id,
+        agent_name="planner"
     )
     
     try:

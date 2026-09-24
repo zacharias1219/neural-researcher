@@ -22,7 +22,7 @@ def run_reporting(orchestrator: Any) -> None:
         claims=claims,
         coverage_report=coverage_report,
         review_result=review_result,
-        output_path="research_plan.md"
+        output_path=str(orchestrator.store.directory / "research_plan.md")
     )
     
     from neuralresearcher.logging import log_success

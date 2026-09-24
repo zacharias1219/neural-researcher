@@ -29,7 +29,10 @@ def run_topic_scope(orchestrator: Any) -> None:
     response = call_llm(
         config=orchestrator.config,
         messages=messages,
-        response_format=response_format
+        response_format=response_format,
+        store=orchestrator.store,
+        task_id=orchestrator.task_id,
+        agent_name="topic_scope"
     )
     
     try:

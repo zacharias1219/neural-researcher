@@ -1,6 +1,9 @@
 from typing import Literal, Optional, List, Dict
 from pydantic import BaseModel, Field
 
+ALLOWED_DOMAINS = {"ML", "CS", "AI", "ML/CS", "Deep Learning", "Machine Learning", "Computer Science", "Artificial Intelligence"}
+
+
 class TopicSpec(BaseModel):
     id: str
     raw_topic: str
