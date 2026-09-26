@@ -37,7 +37,6 @@ def run_topic_scope(context: AgentContext) -> None:
     
     try:
         data = json.loads(response.content)
-        import hashlib
         if context.config.seed is not None:
             data['id'] = f"topic_{hashlib.sha1(f'{context.topic}_{context.config.seed}'.encode()).hexdigest()[:8]}"
         else:

@@ -38,6 +38,14 @@ def test_orchestrator_state_transitions(
     # Reviewer passes by default
     store.save_review_result(ReviewResult(id="rev1", passed=True, issues=[], suggestions=[]))
 
+    def fake_planner(ctx: AgentContext):
+        from neuralresearcher.state import ResearchPlan, PlanStep
+        plan = ResearchPlan(id="1", topic_spec_id="1", hypothesis="h", expected_contribution="c", steps=["s1"])
+        step = PlanStep(id="s1", label="l", type="experiment", risk_level="low")
+        ctx.store.save_plan(plan, [step])
+
+    mock_planner.side_effect = fake_planner
+
     # Run the orchestrator
     orchestrator.run()
     
@@ -68,6 +76,10 @@ def test_orchestrator_reviewer_retry_loop(tmp_path):
     def fake_planner(ctx: AgentContext):
         nonlocal feedback_seen
         feedback_seen.append(ctx.review_feedback)
+        from neuralresearcher.state import ResearchPlan, PlanStep
+        plan = ResearchPlan(id="1", topic_spec_id="1", hypothesis="h", expected_contribution="c", steps=["s1"])
+        step = PlanStep(id="s1", label="l", type="experiment", risk_level="low")
+        ctx.store.save_plan(plan, [step])
 
     def fake_reviewer(ctx: AgentContext):
         nonlocal call_count
@@ -81,6 +93,7 @@ def test_orchestrator_reviewer_retry_loop(tmp_path):
 
     with patch("neuralresearcher.orchestrator.run_planner", side_effect=fake_planner), \
          patch("neuralresearcher.orchestrator.run_reviewer", side_effect=fake_reviewer), \
+         patch("neuralresearcher.orchestrator.run_directions") as mock_run_directions, \
          patch("neuralresearcher.orchestrator.run_reporting"):
         orchestrator.run()
 
@@ -88,6 +101,7 @@ def test_orchestrator_reviewer_retry_loop(tmp_path):
     assert feedback_seen[0] is None  # Initial attempt has no feedback
     assert "Missing ablation steps" in feedback_seen[1]  # Second attempt got feedback
     assert orchestrator.state == OrchestratorState.REPORT_READY
+    mock_run_directions.assert_not_called()
 
 
 def test_orchestrator_reviewer_retry_exhausted_strict_mode(tmp_path):
@@ -99,7 +113,13 @@ def test_orchestrator_reviewer_retry_exhausted_strict_mode(tmp_path):
     def fake_reviewer(ctx: AgentContext):
         store.save_review_result(ReviewResult(id="rev_fail", passed=False, issues=["Persistent issue"], suggestions=[]))
 
-    with patch("neuralresearcher.orchestrator.run_planner"), \
+    def fake_planner(ctx: AgentContext):
+        from neuralresearcher.state import ResearchPlan, PlanStep
+        plan = ResearchPlan(id="1", topic_spec_id="1", hypothesis="h", expected_contribution="c", steps=["s1"])
+        step = PlanStep(id="s1", label="l", type="experiment", risk_level="low")
+        ctx.store.save_plan(plan, [step])
+
+    with patch("neuralresearcher.orchestrator.run_planner", side_effect=fake_planner), \
          patch("neuralresearcher.orchestrator.run_reviewer", side_effect=fake_reviewer):
         orchestrator.run()
 
@@ -174,3 +194,11 @@ def test_guardrail_layer_3_coverage_validation(tmp_path):
         warnings=["w1"] # 1/2 = 0.5 <= 0.6
     ))
     orchestrator._validate_coverage() # Should not raise
+def test_empty_plan_validation_silent_success(tmp_path):
+    store = StateStore(directory=str(tmp_path))
+    config = Config()
+    orchestrator = Orchestrator(topic='test', config=config, store=store, task_id='test_task')
+    
+    with pytest.raises(WorkflowError, match='Plan generation yielded no steps'):
+        orchestrator._to_plan()
+

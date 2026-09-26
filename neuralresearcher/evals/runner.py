@@ -3,13 +3,14 @@ import time
 import uuid
 import json
 import shutil
+from neuralresearcher.evals.core import Outcome
 from pathlib import Path
 from neuralresearcher.config import Config
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.orchestrator import Orchestrator
 from neuralresearcher.evals.tasks import core_suite
 from neuralresearcher.evals.core import Trial
-from neuralresearcher.evals.graders import grade_completion, grade_correctness
+from neuralresearcher.evals.graders import grade_completion, grade_correctness, grade_efficiency
 from neuralresearcher.logging import log_info, log_error
 
 app = typer.Typer()
@@ -39,9 +40,17 @@ def run_suite(
     except ValueError:
         log_error(f"Unknown provider '{provider}'")
         raise typer.Exit(code=1)
+        
+    from neuralresearcher.cli import _ensure_api_key
+    try:
+        _ensure_api_key(resolved_provider)
+    except Exception as e:
+        log_error(str(e))
+        raise typer.Exit(code=1)
     
     for task in suite.tasks:
         log_info(f"Running EvalTask: {task.id} (topic: {task.topic})")
+        task_trials = []
         
         for i in range(trials_per_task):
             run_id = f"{task.id}_run_{i}_{uuid.uuid4().hex[:6]}"
@@ -62,6 +71,10 @@ def run_suite(
             except Exception as e:
                 log_error(str(e))
                 raise typer.Exit(code=1)
+                
+            # Apply task-specific configurations
+            if "min_papers" in task.success_criteria:
+                config.min_papers = task.success_criteria["min_papers"]
             
             orchestrator = Orchestrator(topic=task.topic, config=config, store=store, task_id=run_id)
             
@@ -78,7 +91,9 @@ def run_suite(
             completion_outcome = grade_completion(orchestrator, task)
             correctness_outcome = grade_correctness(orchestrator, task)
             
-            success = completion_outcome.passed and correctness_outcome.passed
+            efficiency_outcome = grade_efficiency(duration_sec=duration, total_tokens=total_tokens)
+            
+            success = completion_outcome.passed and correctness_outcome.passed and efficiency_outcome.passed
             
             trial = Trial(
                 task_id=task.id,
@@ -87,14 +102,28 @@ def run_suite(
                 success=success,
                 outcomes={
                     "completion": completion_outcome,
-                    "correctness": correctness_outcome
+                    "correctness": correctness_outcome,
+                    "efficiency": efficiency_outcome
                 },
                 duration_sec=duration,
                 total_tokens=total_tokens
             )
             
-            results.append(trial.model_dump())
-            log_info(f"  Trial {i} success: {success}")
+            task_trials.append(trial)
+            log_info(f"  Trial {i} success: {success} (score: {correctness_outcome.score})")
+            
+        # Cross-trial consistency
+        if len(task_trials) > 1:
+            scores = [t.outcomes["correctness"].score for t in task_trials]
+            avg_score = sum(scores) / len(scores)
+            variance = sum((s - avg_score) ** 2 for s in scores) / len(scores)
+            consistency = max(0.0, 1.0 - variance)  # Simple variance-based consistency score
+            log_info(f"  Task {task.id} consistency: {consistency:.2f} (avg score: {avg_score:.2f})")
+            
+            for t in task_trials:
+                t.outcomes["consistency"] = Outcome(score=consistency, passed=consistency > 0.8, details=f"Variance: {variance:.3f}")
+                
+        results.extend([t.model_dump() for t in task_trials])
             
     # Save aggregate results
     results_file = eval_dir / "eval_results.json"

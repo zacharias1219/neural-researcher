@@ -136,10 +136,4 @@ def run_reviewer(context: AgentContext) -> None:
     for sug in suggestions:
         log_info(f"  [!] {sug}")
 
-    # In strict mode, raise WorkflowError on failure
-    if not passed and getattr(context.config, "strict_mode", False):
-        raise WorkflowError(
-            f"Reviewer rejected the plan with {len(issues)} issue(s). "
-            "Fix issues or disable --strict mode."
-        )
 

@@ -64,7 +64,8 @@ class StateStore:
                     if p_val:
                         ep_val = getattr(ep, fld, []) or []
                         setattr(ep, fld, list(dict.fromkeys(ep_val + p_val)))
-        state["papers"] = [p.model_dump() for p in deduped.values()]
+        sorted_papers = sorted(deduped.values(), key=lambda x: x.id)
+        state["papers"] = [p.model_dump() for p in sorted_papers]
         self._write_state(state)
 
     def load_papers(self) -> List[Paper]:

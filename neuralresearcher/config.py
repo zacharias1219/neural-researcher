@@ -52,7 +52,7 @@ class Config(BaseModel):
     # Guardrail knobs
     min_papers: int = 3
     relevance_threshold: float = 0.2
-    coverage_warning_threshold: float = 0.6
+    coverage_warning_threshold: float = 1.5
 
 
 def load_config(

@@ -117,7 +117,7 @@ def fetch_paper_impl(paper_id: str) -> Dict[str, Any]:
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
     entry = root.find('atom:entry', ns)
     
-    if not entry:
+    if entry is None:
         raise ToolError(f"Paper {paper_id} not found.")
         
     title = entry.find('atom:title', ns).text.replace('\n', ' ').strip()

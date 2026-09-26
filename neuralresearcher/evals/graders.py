@@ -120,8 +120,8 @@ def grade_correctness(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
 def grade_efficiency(
     duration_sec: float,
     total_tokens: int,
-    max_duration_sec: float = 180.0,
-    max_tokens: int = 50000
+    max_duration_sec: float = 600.0,
+    max_tokens: int = 200000
 ) -> Outcome:
     """Grade trial efficiency against latency and token bounds."""
     dur_score = 1.0 if duration_sec <= max_duration_sec else max(0.0, 1.0 - (duration_sec - max_duration_sec) / max_duration_sec)

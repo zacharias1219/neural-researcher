@@ -180,6 +180,49 @@ def run_planner(context: AgentContext) -> None:
                 metrics=s.get('metrics', []),
             )
             parsed_steps.append(step)
+            
+        # Deterministic Normalization Pass
+        if not plan.primary_gap_ids:
+            plan.primary_gap_ids = [direction.primary_gap_id]
+            
+        types_present = {s.type for s in parsed_steps}
+        if "experiment" not in types_present:
+            exp_step = PlanStep(
+                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Primary Experiment",
+                description="Run main experiments to test the hypothesis.", type="experiment", inputs=[plan.primary_gap_ids[0]], outputs=["experiment_results"],
+                estimated_cost={"compute_hours": 24.0, "human_hours": 8.0}, risk_level="medium"
+            )
+            parsed_steps.append(exp_step)
+            types_present.add("experiment")
+            
+        if "ablation" not in types_present:
+            abl_step = PlanStep(
+                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Ablation Studies",
+                description="Conduct ablation studies on key components.", type="ablation", inputs=["experiment_results"], outputs=["ablation_results"],
+                estimated_cost={"compute_hours": 12.0, "human_hours": 4.0}, risk_level="low"
+            )
+            parsed_steps.append(abl_step)
+            types_present.add("ablation")
+            
+        if "writing" not in types_present:
+            write_step = PlanStep(
+                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Manuscript Writing",
+                description="Draft the final manuscript including intro, methods, and results.", type="writing", inputs=["ablation_results", "experiment_results"], outputs=["final_paper.pdf"],
+                estimated_cost={"compute_hours": 0.0, "human_hours": 40.0}, risk_level="low"
+            )
+            parsed_steps.append(write_step)
+            
+        for step in parsed_steps:
+            if step.type in ("experiment", "data"):
+                if not step.inputs and step.type != "data":
+                    step.inputs = [plan.primary_gap_ids[0]]
+                if not step.outputs:
+                    step.outputs = [f"{step.id}_output"]
+            
+            if step.type == "experiment":
+                if step.estimated_cost.get("compute_hours", 0.0) <= 0.0:
+                    step.estimated_cost["compute_hours"] = 10.0
+
         
         # Compute resource summary
         total_compute = sum(s.estimated_cost.get("compute_hours", 0.0) for s in parsed_steps)

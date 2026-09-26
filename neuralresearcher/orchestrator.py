@@ -46,17 +46,16 @@ class Orchestrator:
         self.task_id = task_id
         self.state = OrchestratorState.INIT
         self.retry_count = 0
-        self.review_feedback: Optional[str] = None
-
-    def get_context(self) -> AgentContext:
-        """Create a decoupled AgentContext instance for agent executions."""
-        return AgentContext(
+        self.context = AgentContext(
             store=self.store,
             config=self.config,
             topic=self.topic,
             task_id=self.task_id,
-            review_feedback=self.review_feedback,
         )
+
+    def get_context(self) -> AgentContext:
+        """Return the persistent AgentContext instance."""
+        return self.context
 
     def set_state(self, new_state: OrchestratorState) -> None:
         log_state_transition(self.state.name, new_state.name)
@@ -186,9 +185,16 @@ class Orchestrator:
         log_agent_end("directions")
         self.set_state(OrchestratorState.DIRECTIONS_PROPOSED)
 
+    def _validate_plan(self) -> None:
+        """Validate that a plan was actually generated with steps."""
+        plan, steps = self.store.load_plan()
+        if not plan or not steps:
+            raise WorkflowError("Plan generation yielded no steps. The research pipeline failed to produce a valid plan.")
+
     def _to_plan(self) -> None:
         log_agent_start("planner")
         run_planner(self.get_context())
+        self._validate_plan()
         log_agent_end("planner")
         self.set_state(OrchestratorState.PLAN_DRAFTED)
 
@@ -207,7 +213,7 @@ class Orchestrator:
             suggestions = review.suggestions if review else []
             issues_text = "\n".join(f"- Issue: {iss}" for iss in issues)
             suggestions_text = "\n".join(f"- Suggestion: {sug}" for sug in suggestions)
-            self.review_feedback = f"{issues_text}\n{suggestions_text}".strip()
+            self.context.review_feedback = f"{issues_text}\n{suggestions_text}".strip()
 
             if self.retry_count < self.config.max_retries:
                 self.retry_count += 1
@@ -225,7 +231,7 @@ class Orchestrator:
                         f"Plan failed review after {self.config.max_retries} attempts: {', '.join(issues)}"
                     )
 
-        self.review_feedback = None
+        self.context.review_feedback = None
         self.set_state(OrchestratorState.PLAN_REVIEWED)
 
     def _to_report(self) -> None:

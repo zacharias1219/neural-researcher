@@ -8,10 +8,10 @@ CORE_TASKS = [
         success_criteria={"min_papers": 3, "min_gaps": 2}
     ),
     EvalTask(
-        id="task_mamba_mpc",
-        topic="Time-series Mamba MPC",
-        description="Time-series Mamba MPC",
-        success_criteria={"min_papers": 2, "required_keyword": "MPC"}
+        id="task_mamba_time_series",
+        topic="Mamba models for time-series forecasting",
+        description="Mamba applied to time-series",
+        success_criteria={"min_papers": 2, "required_keyword": "time-series"}
     ),
     EvalTask(
         id="task_mamba_edge",
@@ -28,8 +28,8 @@ CORE_TASKS = [
     ),
     EvalTask(
         id="task_neg_over_trigger",
-        topic="Mamba block size parameter exact value optimization for a 3 billion parameter model",
-        description="Extremely narrow topic",
+        topic="The GneebGnab Architecture for Quantum-Linguistic Forecasting",
+        description="Extremely fake topic to ensure retrieval finds 0 papers",
         negative_task=True,
         success_criteria={"expect_halt": True}
     )

@@ -81,3 +81,13 @@ def test_store_update_papers_merging(tmp_path: Path):
     assert p1_loaded.datasets == ["D1"]
     assert p1_loaded.metrics == ["Acc"]
 
+
+
+def test_store_dedupe_papers(tmp_path: Path):
+    store = StateStore(directory=str(tmp_path))
+    p1 = Paper(id="p1", title="A", authors=[], venue="", year=2024, url="", abstract="")
+    p2 = Paper(id="p1", title="A", authors=[], venue="", year=2024, url="", abstract="", methods=["M1"])
+    store.save_papers([p1, p2])
+    papers = store.load_papers()
+    assert len(papers) == 1
+    assert "M1" in papers[0].methods

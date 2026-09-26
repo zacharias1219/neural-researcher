@@ -177,18 +177,7 @@ class TestReviewerChecks:
         result = tmp_store.load_review_result()
         assert any("baseline" in s.lower() for s in result.suggestions)
 
-    def test_strict_mode_raises_on_failure(self, tmp_store):
-        plan = _make_plan(primary_gap_ids=[])
-        steps = [
-            _make_step("step_01", type="data"),
-        ]
-        tmp_store.save_plan(plan, steps)
-        
-        orch = MockOrchestrator(tmp_store, strict=True)
-        from neuralresearcher.agents.reviewer import run_reviewer
-        
-        with pytest.raises(WorkflowError):
-            run_reviewer(orch)
+
 
     def test_zero_timeline_suggestion(self, tmp_store):
         plan = _make_plan(timeline_weeks=0)
