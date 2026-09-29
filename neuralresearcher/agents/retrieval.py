@@ -44,6 +44,9 @@ def run_retrieval(context: AgentContext) -> None:
                 log_error(str(e))
                 
     papers = []
+    start_year = topic_spec.time_window.get("start_year") if topic_spec.time_window else None
+    end_year = topic_spec.time_window.get("end_year") if topic_spec.time_window else None
+    
     for p_data in papers_data:
         paper = Paper(
             id=p_data["id"],
@@ -54,6 +57,7 @@ def run_retrieval(context: AgentContext) -> None:
             url=p_data["url"],
             abstract=p_data["abstract"]
         )
-        papers.append(paper)
+        if (start_year is None or paper.year >= start_year) and (end_year is None or paper.year <= end_year):
+            papers.append(paper)
         
     context.store.save_papers(papers)

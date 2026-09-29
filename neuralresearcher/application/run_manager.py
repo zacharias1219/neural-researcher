@@ -27,9 +27,10 @@ from neuralresearcher.logging import log_info, log_error, log_warning
 import re
 
 class RunManager(ResearchService):
-    def __init__(self, data_dir: str = "research", max_concurrent_runs: int = 2):
+    def __init__(self, data_dir: str = "research", max_concurrent_runs: int = 2, max_result_bytes: int = 10 * 1024 * 1024):
         self.data_dir = Path(data_dir)
         self.max_concurrent_runs = max_concurrent_runs
+        self.max_result_bytes = max_result_bytes
         self._semaphore = asyncio.Semaphore(max_concurrent_runs)
         self._run_locks: Dict[str, asyncio.Lock] = {}
         self._cancellation_tokens: Dict[str, CancellationToken] = {}
@@ -87,6 +88,13 @@ class RunManager(ResearchService):
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
         
+        async with self._get_lock(run_id):
+            if run_id in self._active_runs:
+                raise ValueError("RUN_ALREADY_ACTIVE")
+            token = CancellationToken()
+            self._active_runs.add(run_id)
+            self._cancellation_tokens[run_id] = token
+
         manifest = store.load_manifest()
         now = datetime.datetime.now().isoformat()
         manifest.update({
@@ -140,11 +148,16 @@ class RunManager(ResearchService):
             if manifest.get("success"):
                 raise ValueError("RESUME_NOT_ALLOWED: Cannot resume a successful run")
 
+            token = CancellationToken()
+            self._active_runs.add(request.run_id)
+            self._cancellation_tokens[request.run_id] = token
+
             # Reset terminal states
             manifest.pop("final_state", None)
             manifest.pop("success", None)
             manifest.pop("halt_code", None)
             manifest.pop("failed_stage", None)
+            manifest.pop("error_message", None)
             manifest["cancellation_requested"] = False
             
             # Clear artifacts to restart from INIT
@@ -194,13 +207,7 @@ class RunManager(ResearchService):
             )
 
     async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool, seed: Optional[int], max_papers: Optional[int], time_window_start: Optional[int], time_window_end: Optional[int]):
-        async with self._get_lock(run_id):
-            if run_id in self._active_runs:
-                return
-            self._active_runs.add(run_id)
-            
-            cancel_token = CancellationToken()
-            self._cancellation_tokens[run_id] = cancel_token
+        cancel_token = self._cancellation_tokens.get(run_id)
 
         try:
             async with self._semaphore:
@@ -250,6 +257,7 @@ class RunManager(ResearchService):
                         "success": result.success,
                         "halt_code": result.halt_code.value if result.halt_code else None,
                         "failed_stage": result.failed_stage,
+                        "error_message": result.message,
                         "duration_seconds": manifest.get("duration_seconds", 0) + result.duration_seconds,
                         "artifact_paths": result.artifact_paths,
                         "finished_at": datetime.datetime.now().isoformat()
@@ -298,7 +306,7 @@ class RunManager(ResearchService):
             terminal=terminal,
             halt_code=manifest.get("halt_code"),
             failed_stage=manifest.get("failed_stage"),
-            error_message=None,
+            error_message=manifest.get("error_message"),
             duration_seconds=manifest.get("duration_seconds", 0.0),
             artifact_count=len(manifest.get("artifact_paths", {})),
             cancellation_requested=manifest.get("cancellation_requested", False)
@@ -402,7 +410,11 @@ class RunManager(ResearchService):
         manifest = store.load_manifest()
         artifacts = []
         for name, path_str in manifest.get("artifact_paths", {}).items():
-            p = Path(path_str)
+            p = Path(path_str).resolve()
+            try:
+                p.relative_to(store.directory.resolve())
+            except ValueError:
+                continue
             if p.exists():
                 stat = p.stat()
                 artifacts.append(ArtifactMetadata(
@@ -441,8 +453,7 @@ class RunManager(ResearchService):
         if not target_path.exists() or not target_path.is_file():
             raise ValueError("RESOURCE_NOT_FOUND")
             
-        config = load_config()
-        if target_path.stat().st_size > getattr(config, 'max_result_bytes', 10 * 1024 * 1024):
+        if target_path.stat().st_size > self.max_result_bytes:
             raise ValueError("ARTIFACT_TOO_LARGE")
                 
         return target_path.read_bytes()

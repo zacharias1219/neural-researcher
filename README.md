@@ -5,7 +5,7 @@ NeuralResearcher is a terminal-based, multi-agent research planner for ML/CS top
 ## Features
 
 - **Topic & Scope Agent**: Refines raw ideas into structured scope specifications.
-- **Retrieval Agent**: Multi-source discovery across arXiv and Semantic Scholar.
+- **Retrieval Agent**: Searches arXiv and uses Semantic Scholar as an optional enrichment/fallback source.
 - **Reading Agent**: Extracts metadata and semantic claims from abstracts (abstract-only for v0.1).
 - **Coverage Agent**: Dynamically groups papers into sub-domains to highlight coverage gaps.
 - **Gaps & Directions Agents**: Identifies novel opportunities and constructs hypotheses.

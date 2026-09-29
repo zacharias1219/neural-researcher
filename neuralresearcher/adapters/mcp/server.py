@@ -44,7 +44,8 @@ def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: in
     
     service = RunManager(
         data_dir=settings.data_dir,
-        max_concurrent_runs=settings.max_concurrent_runs
+        max_concurrent_runs=settings.max_concurrent_runs,
+        max_result_bytes=settings.max_result_bytes
     )
     server = create_mcp_server(service, settings)
 
@@ -59,7 +60,7 @@ def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: in
         if settings.host != "127.0.0.1" and not settings.auth_token:
             raise RuntimeError("Authentication must be configured when binding to a non-loopback interface.")
             
-        app = server.streamable_http_app(endpoint=settings.path)
+        app = server.streamable_http_app(settings.path)
         
         if settings.auth_token:
             app.add_middleware(BearerAuthMiddleware, auth_token=settings.auth_token)

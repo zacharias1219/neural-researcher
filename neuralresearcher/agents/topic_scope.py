@@ -10,7 +10,12 @@ from typing import List, Dict
 class TopicSpecResponse(BaseModel):
     domain: TopicDomain
     subfields: List[str]
-    time_window: Dict[str, int] = Field(default_factory=lambda: {"start_year": 2000, "end_year": 2024})
+    time_window: Dict[str, int] = Field(
+        default_factory=lambda: {
+            "start_year": 2000,
+            "end_year": __import__('datetime').datetime.now().year,
+        }
+    )
     scope_constraints: Dict[str, str] = Field(default_factory=dict)
     keywords: List[str]
 
