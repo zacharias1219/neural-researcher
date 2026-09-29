@@ -16,11 +16,7 @@ def test_capabilities_matrix():
     anthropic_adapter = AnthropicAdapter()
     assert not anthropic_adapter.capabilities.supports_json_schema
 
-@patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
-def test_unsupported_seed_omitted(mock_get_client):
-    # Anthropic doesn't support seed in our adapter.
-    pass # Wait, anthropic adapter does not pass seed.
-    
+
 @patch("neuralresearcher.llm.AnthropicAdapter.get_client")
 def test_anthropic_seed_omitted(mock_get_client):
     mock_client = MagicMock()
@@ -71,9 +67,17 @@ def test_native_json_schema_fallback(mock_get_client):
 
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_auth_errors_not_retried(mock_get_client):
+    import openai
+    import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
-    mock_client.chat.completions.create.side_effect = Exception("401 Unauthorized")
+    
+    # Mock an openai AuthenticationError
+    request = httpx.Request("POST", "https://api.openai.com")
+    response = httpx.Response(401, request=request)
+    mock_client.chat.completions.create.side_effect = openai.AuthenticationError(
+        message="401 Unauthorized", response=response, body=None
+    )
     
     config = Config(provider=LLMProvider.OPENAI, api_retries=2)
     with pytest.raises(LLMError, match="Non-retryable API Error"):

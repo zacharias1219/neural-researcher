@@ -49,7 +49,7 @@ def run_retrieval(context: AgentContext) -> None:
             id=p_data["id"],
             title=p_data["title"],
             authors=p_data["authors"],
-            venue="arXiv",
+            venue=p_data.get("source", "arxiv"),
             year=p_data.get("year", 2024),
             url=p_data["url"],
             abstract=p_data["abstract"]

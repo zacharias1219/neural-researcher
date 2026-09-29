@@ -6,11 +6,11 @@ NeuralResearcher is a terminal-based, multi-agent research planner for ML/CS top
 
 - **Topic & Scope Agent**: Refines raw ideas into structured scope specifications.
 - **Retrieval Agent**: Multi-source discovery across arXiv and Semantic Scholar.
-- **Reading Agent**: Extracts metadata and semantic claims from full text / abstracts.
+- **Reading Agent**: Extracts metadata and semantic claims from abstracts (abstract-only for v0.1).
 - **Coverage Agent**: Dynamically groups papers into sub-domains to highlight coverage gaps.
 - **Gaps & Directions Agents**: Identifies novel opportunities and constructs hypotheses.
 - **Planner Agent**: Generates dependency-validated experimental steps.
-- **Reviewer Agent**: Checks plan for logical cycles and verifies claims.
+- **Reviewer Agent**: Checks plan for logical cycles and performs claim consistency review.
 
 ## Installation
 
@@ -35,20 +35,29 @@ export ANTHROPIC_API_KEY=your_key
 
 Run the researcher:
 ```bash
-neuralresearcher "Mamba architectures for edge devices" --provider groq
+neuralresearcher run "Mamba architectures for edge devices" --provider groq
 ```
 
 ### Outputs
 
-The pipeline will emit a final `research_plan.md` in the current directory, along with a `research/` directory containing the robust, versioned JSON state of all artifacts.
+The pipeline will emit artifacts and robust, versioned JSON state in the `research/runs/{run_id}/` directory. The final research plan is located at `research/runs/{run_id}/research_plan.md`.
 
 ## Evaluation Harness
 
 NeuralResearcher includes a powerful evaluation harness to test its behavior across topics and providers.
 
 ```bash
-neuralresearcher-eval --suite core --providers openai,anthropic
+neuralresearcher-evals --suite core --providers openai,anthropic
 ```
+
+## MCP Server
+
+NeuralResearcher includes a Model Context Protocol (MCP) server.
+
+- **stdio**: Default transport mode.
+- **HTTP**: Requires authentication `NEURALRESEARCHER_MCP_AUTH_TOKEN`. Can be started with `neuralresearcher-mcp --transport streamable-http`.
+- **Cancellation**: Cancellation is cooperative. Provider and HTTP timeouts are finite.
+- **Environment**: Use environment variables like `NEURALRESEARCHER_MCP_AUTH_TOKEN`, `NEURALRESEARCHER_DATA_DIR` to configure the MCP server.
 
 ## Architecture
 

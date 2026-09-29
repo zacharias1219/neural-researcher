@@ -89,14 +89,16 @@ def _fetch_arxiv_xml(url: str, config: Config) -> bytes:
     return response.content
 
 
-def search_papers_impl(keywords: List[str], max_results: int = 5, config: Config = None) -> List[Dict[str, Any]]:
+def search_papers_impl(keywords: List[str], max_results: int = None, config: Config = None) -> List[Dict[str, Any]]:
     """Search papers via arXiv API or replay cassette."""
+    if max_results is None:
+        max_results = getattr(config, 'max_papers', 5) if config else 5
     terms = [urllib.parse.quote(term.strip()) for term in keywords if term.strip()]
     if not terms:
         return []
         
     formatted_query = "+AND+all:".join(terms)
-    url = f"http://export.arxiv.org/api/query?search_query=all:{formatted_query}&start=0&max_results={max_results}"
+    url = f"https://export.arxiv.org/api/query?search_query=all:{formatted_query}&start=0&max_results={max_results}"
     xml_content = _fetch_arxiv_xml(url, config)
         
     root = ET.fromstring(xml_content)
@@ -118,7 +120,8 @@ def search_papers_impl(keywords: List[str], max_results: int = 5, config: Config
             "authors": authors,
             "year": year,
             "url": url_link,
-            "abstract": summary
+            "abstract": summary,
+            "source": "arxiv"
         })
         
     if not os.environ.get("ARXIV_CASSETTE_PATH"):
@@ -132,7 +135,8 @@ def search_papers_impl(keywords: List[str], max_results: int = 5, config: Config
             if s2_response.status_code == 200:
                 data = s2_response.json()
                 for entry in data.get("data", []):
-                    if any(p["title"].lower() == entry.get("title", "").lower() for p in papers):
+                    entry_title_norm = entry.get("title", "").strip().lower()
+                    if any(p["title"].strip().lower() == entry_title_norm for p in papers):
                         continue # Skip duplicates
                     papers.append({
                         "id": f"s2:{entry.get('paperId')}",
@@ -140,17 +144,22 @@ def search_papers_impl(keywords: List[str], max_results: int = 5, config: Config
                         "authors": [a.get("name") for a in entry.get("authors", [])],
                         "year": entry.get("year", 2024),
                         "url": entry.get("url", ""),
-                        "abstract": entry.get("abstract", "") or "No abstract available."
+                        "abstract": entry.get("abstract", "") or "No abstract available.",
+                        "source": "semantic_scholar"
                     })
-        except Exception:
-            pass # Ignore semantic scholar errors
+            else:
+                from neuralresearcher.logging import log_warning
+                log_warning(f"Semantic Scholar enrichment failed with status {s2_response.status_code}")
+        except Exception as e:
+            from neuralresearcher.logging import log_warning
+            log_warning(f"Semantic Scholar enrichment failed: {type(e).__name__}")
         
     return papers[:max_results]
 
 
 def fetch_paper_impl(paper_id: str, config: Config = None) -> Dict[str, Any]:
     """Fetch specific paper from arXiv by ID or replay cassette."""
-    url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
+    url = f"https://export.arxiv.org/api/query?id_list={paper_id}"
     xml_content = _fetch_arxiv_xml(url, config)
         
     root = ET.fromstring(xml_content)

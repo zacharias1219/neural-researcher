@@ -135,13 +135,14 @@ class OpenAICompatibleAdapter:
                 response = client.chat.completions.create(**kwargs)
                 break
             except Exception as e:
-                err_msg = str(e)
-                if "401" in err_msg or "403" in err_msg or "invalid" in err_msg.lower() or "schema" in err_msg.lower():
-                    raise LLMError(f"Non-retryable API Error ({config.provider.value}): {err_msg}")
-                if attempt < config.api_retries:
-                    time.sleep((2 ** attempt) + random.uniform(0, 1))
-                    continue
-                raise LLMError(f"Error calling LLM API ({config.provider.value}): {err_msg}")
+                import openai
+                if isinstance(e, (openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)):
+                    raise LLMError(f"Non-retryable API Error ({config.provider.value}): {str(e)}")
+                if isinstance(e, (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError)) or getattr(e, 'status_code', 200) >= 500 or getattr(e, 'status_code', 200) == 429:
+                    if attempt < config.api_retries:
+                        time.sleep((2 ** attempt) + random.uniform(0, 1))
+                        continue
+                raise LLMError(f"Error calling LLM API ({config.provider.value}): {str(e)}")
 
         if response is None:
             raise LLMError(f"Exceeded max retries calling {config.provider.value} API.")
@@ -238,13 +239,14 @@ class AnthropicAdapter:
                 response = client.messages.create(**kwargs)
                 break
             except Exception as e:
-                err_msg = str(e)
-                if "401" in err_msg or "403" in err_msg or "invalid" in err_msg.lower():
-                    raise LLMError(f"Non-retryable API Error (Anthropic): {err_msg}")
-                if attempt < config.api_retries:
-                    time.sleep((2 ** attempt) + random.uniform(0, 1))
-                    continue
-                raise LLMError(f"Error calling Anthropic API: {err_msg}")
+                import anthropic
+                if isinstance(e, (anthropic.AuthenticationError, anthropic.PermissionDeniedError, anthropic.BadRequestError)):
+                    raise LLMError(f"Non-retryable API Error (Anthropic): {str(e)}")
+                if isinstance(e, (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)) or getattr(e, 'status_code', 200) >= 500 or getattr(e, 'status_code', 200) == 429:
+                    if attempt < config.api_retries:
+                        time.sleep((2 ** attempt) + random.uniform(0, 1))
+                        continue
+                raise LLMError(f"Error calling Anthropic API: {str(e)}")
 
         if response is None:
             raise LLMError("Exceeded max retries calling Anthropic API.")
@@ -345,7 +347,7 @@ def generate_structured(
     system_prompt_addition = f"\n\nIMPORTANT: You must return a JSON object matching this schema:\n{json.dumps(schema, indent=2)}"
     
     # Inject schema into system prompt to assist fallback modes
-    modified_messages = list(messages)
+    modified_messages = [dict(msg) for msg in messages]
     for msg in modified_messages:
         if msg["role"] == "system":
             msg["content"] = msg["content"] + system_prompt_addition
@@ -376,6 +378,8 @@ def generate_structured(
                 "role": "user",
                 "content": f"Schema validation failed. Please fix the JSON. Errors:\n{str(e)}"
             })
+        except LLMError:
+            raise
         except Exception as e:
             last_error = e
             raise SchemaError(f"Unexpected error during structured generation: {str(e)}")

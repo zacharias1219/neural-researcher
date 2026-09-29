@@ -113,7 +113,7 @@ def _select_model_interactive(provider: LLMProvider) -> str:
 
 @app.command()
 def run(
-    topic: str = typer.Argument(..., help="The research topic to investigate."),
+    topic: Optional[str] = typer.Argument(None, help="The research topic to investigate."),
     provider: Optional[str] = typer.Option(
         None, "--provider", "-p",
         help="LLM provider: groq, openai, anthropic, deepseek.",
@@ -141,6 +141,10 @@ def run(
       neuralresearcher run "vision transformers" -p anthropic -m claude-3-5-sonnet-latest
     """
     print_banner()
+    
+    if bool(topic) == bool(resume):
+        log_error("You must provide exactly one of: topic or --resume")
+        raise typer.Exit(code=1)
 
     # --- Resolve provider ---
     resolved_provider: LLMProvider

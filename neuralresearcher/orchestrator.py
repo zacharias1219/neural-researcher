@@ -1,3 +1,4 @@
+import asyncio
 from enum import Enum, auto
 import time
 
@@ -11,7 +12,7 @@ from neuralresearcher.logging import (
     log_error,
     log_warning,
 )
-from neuralresearcher.errors import NeuralResearcherError, WorkflowError, SchemaError
+from neuralresearcher.errors import NeuralResearcherError, WorkflowError, SchemaError, LLMError, ToolError, StateCorruptionError
 from neuralresearcher.state import HaltCode, RunResult
 from neuralresearcher.agents.topic_scope import run_topic_scope
 from neuralresearcher.agents.retrieval import run_retrieval
@@ -46,6 +47,7 @@ class Orchestrator:
         self.task_id = task_id
         self.state = OrchestratorState.INIT
         self.cancel_token = None
+        self.on_state_change = None
 
         self.retry_count = 0
         self.context = AgentContext(
@@ -62,6 +64,8 @@ class Orchestrator:
     def set_state(self, new_state: OrchestratorState) -> None:
         log_state_transition(self.state.name, new_state.name)
         self.state = new_state
+        if self.on_state_change:
+            self.on_state_change(new_state.name)
 
     def run(self) -> RunResult:
         start_time = time.time()
@@ -109,6 +113,30 @@ class Orchestrator:
             self.set_state(OrchestratorState.HALTED)
             halt_code = HaltCode.INVALID_MODEL_OUTPUT
             message = str(e)
+        except LLMError as e:
+            log_error(str(e))
+            failed_stage = self.state.name
+            self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.PROVIDER_ERROR
+            message = str(e)
+        except ToolError as e:
+            log_error(str(e))
+            failed_stage = self.state.name
+            self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.TOOL_ERROR
+            message = str(e)
+        except StateCorruptionError as e:
+            log_error(str(e))
+            failed_stage = self.state.name
+            self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.STORAGE_FAILURE
+            message = str(e)
+        except asyncio.CancelledError as e:
+            log_error("Run cancelled")
+            failed_stage = self.state.name
+            self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.CANCELLED
+            message = str(e)
         except NeuralResearcherError as e:
             log_error(str(e))
             failed_stage = self.state.name
@@ -124,6 +152,16 @@ class Orchestrator:
 
         duration = time.time() - start_time
         
+        total_tokens = 0
+        try:
+            import json
+            for t_path in (self.store.directory / "transcripts").glob("*.json"):
+                with open(t_path) as f:
+                    data = json.load(f)
+                total_tokens += data.get("usage", {}).get("total_tokens", 0)
+        except Exception:
+            pass
+            
         return RunResult(
             run_id=self.task_id,
             final_state=self.state.name,
@@ -135,7 +173,7 @@ class Orchestrator:
                 "state": str(self.store.state_file),
                 "plan": str(self.store.directory / "research_plan.md")
             },
-            total_tokens=0, # Placeholder, can be populated if usage tracked
+            total_tokens=total_tokens,
             duration_seconds=duration
         )
 

@@ -66,6 +66,8 @@ class ResearchResult(BaseModel):
     halt_code: Optional[str]
     failed_stage: Optional[str]
     artifact_resource_uris: dict[str, str]
+    review_passed: Optional[bool] = None
+    warnings: list[str] = Field(default_factory=list)
 
 class RunSummary(BaseModel):
     run_id: str

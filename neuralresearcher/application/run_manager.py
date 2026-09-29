@@ -24,6 +24,7 @@ from neuralresearcher.application.models import (
 from neuralresearcher.application.research_service import ResearchService
 from neuralresearcher.application.cancellation import CancellationToken
 from neuralresearcher.logging import log_info, log_error, log_warning
+import re
 
 class RunManager(ResearchService):
     def __init__(self, data_dir: str = "research", max_concurrent_runs: int = 2):
@@ -33,6 +34,7 @@ class RunManager(ResearchService):
         self._run_locks: Dict[str, asyncio.Lock] = {}
         self._cancellation_tokens: Dict[str, CancellationToken] = {}
         self._active_runs: set[str] = set()
+        self._tasks: Dict[str, asyncio.Task] = {}
         
         # Reconciliation on startup
         self._reconcile_runs()
@@ -62,6 +64,20 @@ class RunManager(ResearchService):
             self._run_locks[run_id] = asyncio.Lock()
         return self._run_locks[run_id]
 
+    def _validate_run_id(self, run_id: str) -> None:
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", run_id):
+            raise ValueError("INVALID_RUN_ID")
+
+    def _task_done_callback(self, run_id: str, task: asyncio.Task):
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log_error(f"Run task {run_id} failed with unhandled exception: {e}")
+        finally:
+            self._tasks.pop(run_id, None)
+
     async def start_run(self, request: StartResearchRequest) -> RunHandle:
         # We start by getting a new StateStore which generates a run_id
         store = StateStore(directory=str(self.data_dir))
@@ -81,7 +97,19 @@ class RunManager(ResearchService):
         store.save_manifest(manifest)
         
         # Submit to background
-        asyncio.create_task(self._execute_run(run_id, request.topic, request.provider, request.model, request.strict))
+        task = asyncio.create_task(self._execute_run(
+            run_id, 
+            request.topic, 
+            request.provider, 
+            request.model, 
+            request.strict,
+            request.seed,
+            request.max_papers,
+            request.time_window_start,
+            request.time_window_end
+        ))
+        self._tasks[run_id] = task
+        task.add_done_callback(lambda t: self._task_done_callback(run_id, t))
         
         return RunHandle(
             run_id=run_id,
@@ -95,6 +123,7 @@ class RunManager(ResearchService):
         )
 
     async def resume_run(self, request: ResumeResearchRequest) -> RunHandle:
+        self._validate_run_id(request.run_id)
         async with self._get_lock(request.run_id):
             if request.run_id in self._active_runs:
                 raise ValueError("RUN_ALREADY_ACTIVE")
@@ -123,13 +152,19 @@ class RunManager(ResearchService):
             
             provider_enum = LLMProvider(provider_val)
             
-            asyncio.create_task(self._execute_run(
+            task = asyncio.create_task(self._execute_run(
                 request.run_id, 
                 manifest.get("topic", "Unknown"), 
                 provider_enum, 
                 model_val, 
-                manifest.get("strict", False)
+                manifest.get("strict", False),
+                manifest.get("seed"),
+                manifest.get("max_papers"),
+                manifest.get("time_window_start"),
+                manifest.get("time_window_end")
             ))
+            self._tasks[request.run_id] = task
+            task.add_done_callback(lambda t: self._task_done_callback(request.run_id, t))
             
             now = manifest.get("created_at", datetime.datetime.now().isoformat())
             
@@ -144,7 +179,7 @@ class RunManager(ResearchService):
                 plan_resource_uri=f"research://runs/{request.run_id}/plan"
             )
 
-    async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool):
+    async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool, seed: Optional[int], max_papers: Optional[int], time_window_start: Optional[int], time_window_end: Optional[int]):
         async with self._get_lock(run_id):
             if run_id in self._active_runs:
                 return
@@ -161,15 +196,32 @@ class RunManager(ResearchService):
                     model_override=model if model else None,
                     strict_override=strict
                 )
+                if seed is not None:
+                    config.seed = seed
+                if max_papers is not None:
+                    config.max_papers = max_papers
                 
                 manifest = store.load_manifest()
                 manifest["started_at"] = datetime.datetime.now().isoformat()
+                if seed is not None: manifest["seed"] = seed
+                if max_papers is not None: manifest["max_papers"] = max_papers
+                if time_window_start is not None: manifest["time_window_start"] = time_window_start
+                if time_window_end is not None: manifest["time_window_end"] = time_window_end
                 store.save_manifest(manifest)
 
                 orchestrator = Orchestrator(topic=topic, config=config, store=store, task_id=run_id)
                 # We will inject cancel_token to orchestrator later
                 orchestrator.cancel_token = cancel_token
                 orchestrator.context.cancel_token = cancel_token
+
+                def state_cb(state_name: str):
+                    m = store.load_manifest()
+                    if m:
+                        m["current_stage"] = state_name
+                        m["updated_at"] = datetime.datetime.now().isoformat()
+                        store.save_manifest(m)
+                        
+                orchestrator.on_state_change = state_cb
                 
                 result = await asyncio.to_thread(orchestrator.run)
                 
@@ -204,6 +256,7 @@ class RunManager(ResearchService):
                 self._cancellation_tokens.pop(run_id, None)
 
     async def get_status(self, run_id: str) -> RunStatus:
+        self._validate_run_id(run_id)
         store = StateStore(directory=str(self.data_dir), run_id=run_id)
         if not store.directory.exists():
             raise ValueError("UNKNOWN_RUN")
@@ -219,7 +272,7 @@ class RunManager(ResearchService):
             provider=manifest.get("provider", "Unknown"),
             model=manifest.get("model", ""),
             status=manifest.get("final_state") or "ACTIVE",
-            current_stage=manifest.get("final_state") or "ACTIVE",
+            current_stage=manifest.get("current_stage") or manifest.get("final_state") or "INIT",
             created_at=manifest.get("created_at"),
             started_at=manifest.get("started_at"),
             finished_at=manifest.get("finished_at"),
@@ -234,6 +287,7 @@ class RunManager(ResearchService):
         )
 
     async def cancel_run(self, run_id: str) -> RunStatus:
+        self._validate_run_id(run_id)
         async with self._get_lock(run_id):
             store = StateStore(directory=str(self.data_dir), run_id=run_id)
             if not store.directory.exists():
@@ -252,6 +306,7 @@ class RunManager(ResearchService):
         return await self.get_status(run_id)
 
     async def get_result(self, run_id: str) -> ResearchResult:
+        self._validate_run_id(run_id)
         store = StateStore(directory=str(self.data_dir), run_id=run_id)
         if not store.directory.exists():
             raise ValueError("UNKNOWN_RUN")
@@ -260,6 +315,10 @@ class RunManager(ResearchService):
         if "final_state" not in manifest:
             raise ValueError("RUN_NOT_READY")
             
+        review = store.load_review_result()
+        review_passed = review.passed if review else None
+        warnings = review.issues if review and not review.passed else []
+        
         return ResearchResult(
             run_id=run_id,
             final_state=manifest["final_state"],
@@ -270,7 +329,9 @@ class RunManager(ResearchService):
             artifact_resource_uris={
                 k: f"research://runs/{run_id}/artifacts/{Path(v).name}"
                 for k, v in manifest.get("artifact_paths", {}).items()
-            }
+            },
+            review_passed=review_passed,
+            warnings=warnings
         )
 
     async def list_runs(
@@ -315,6 +376,7 @@ class RunManager(ResearchService):
         return results[:limit]
 
     async def list_artifacts(self, run_id: str) -> list[ArtifactMetadata]:
+        self._validate_run_id(run_id)
         store = StateStore(directory=str(self.data_dir), run_id=run_id)
         if not store.directory.exists():
             raise ValueError("UNKNOWN_RUN")
@@ -336,6 +398,7 @@ class RunManager(ResearchService):
         return artifacts
 
     async def read_artifact(self, run_id: str, artifact_name: str) -> bytes:
+        self._validate_run_id(run_id)
         store = StateStore(directory=str(self.data_dir), run_id=run_id)
         if not store.directory.exists():
             raise ValueError("UNKNOWN_RUN")

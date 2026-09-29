@@ -23,12 +23,20 @@ def test_missing_groq_api_key():
 @patch("neuralresearcher.llm.time.sleep")
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
+    import openai
+    import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
+    
+    request = httpx.Request("POST", "https://api.groq.com")
+    response = httpx.Response(429, request=request)
+    rate_limit_err = openai.RateLimitError(
+        message="Rate limit reached 429", response=response, body=None
+    )
 
     mock_client.chat.completions.create.side_effect = [
-        Exception("Rate limit reached 429"),
-        Exception("Rate limit reached 429"),
+        rate_limit_err,
+        rate_limit_err,
         MagicMock(
             choices=[MagicMock(message=MagicMock(content="success", tool_calls=[]))],
             usage=MagicMock(prompt_tokens=10, completion_tokens=10, total_tokens=20),
@@ -46,10 +54,18 @@ def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
 @patch("neuralresearcher.llm.time.sleep")
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_max_retries_exceeded(mock_get_client, mock_sleep):
+    import openai
+    import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
+    
+    request = httpx.Request("POST", "https://api.groq.com")
+    response = httpx.Response(429, request=request)
+    rate_limit_err = openai.RateLimitError(
+        message="Rate limit reached 429", response=response, body=None
+    )
 
-    mock_client.chat.completions.create.side_effect = Exception("Rate limit reached 429")
+    mock_client.chat.completions.create.side_effect = rate_limit_err
 
     config = Config(provider=LLMProvider.GROQ, api_retries=2)
     with pytest.raises(LLMError, match="Error calling LLM API"):

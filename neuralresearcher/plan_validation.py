@@ -20,8 +20,8 @@ def normalize_plan(plan: ResearchPlan, steps: List[PlanStep]) -> Tuple[ResearchP
         if not step.status:
             step.status = "pending"
             
-        # Deduplicate step IDs
-        if not step.id or step.id in seen_ids:
+        # Ensure ID exists, but do not deduplicate (let validator catch it)
+        if not step.id:
             step.id = f"step_{i+1}"
             
         seen_ids.add(step.id)
@@ -67,7 +67,55 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
                 consumers[inp] = []
             consumers[inp].append(step.id)
 
-    # Dependency validation
+    # Cycle detection
+    visited = set()
+    path = set()
+    has_cycle = False
+    def visit(node: str) -> bool:
+        if node in path:
+            return True # Cycle
+        if node in visited:
+            return False
+        
+        visited.add(node)
+        path.add(node)
+        
+        if node in step_map:
+            for dep in step_map[node].dependencies:
+                if visit(dep):
+                    return True
+        path.remove(node)
+        return False
+        
+    for step in steps:
+        if visit(step.id):
+            has_cycle = True
+            issues.append(ValidationIssue(
+                code="DEPENDENCY_CYCLE",
+                severity="error",
+                message="Cycle detected in dependencies.",
+                step_id=step.id,
+                repairable=False
+            ))
+            break # only report once
+
+    reachability = {}
+    def compute_reachability(node: str) -> set[str]:
+        if node in reachability:
+            return reachability[node]
+        if node not in step_map:
+            return set()
+        res = set(step_map[node].dependencies)
+        for dep in step_map[node].dependencies:
+            res.update(compute_reachability(dep))
+        reachability[node] = res
+        return res
+        
+    if not has_cycle:
+        for step in steps:
+            compute_reachability(step.id)
+
+    # Dependency and Producer validation
     for step in steps:
         for dep in step.dependencies:
             if dep == step.id:
@@ -97,36 +145,16 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
                     step_id=step.id,
                     repairable=False
                 ))
-
-    # Cycle detection
-    visited = set()
-    path = set()
-    def visit(node: str) -> bool:
-        if node in path:
-            return True # Cycle
-        if node in visited:
-            return False
-        
-        visited.add(node)
-        path.add(node)
-        
-        if node in step_map:
-            for dep in step_map[node].dependencies:
-                if visit(dep):
-                    return True
-        path.remove(node)
-        return False
-        
-    for step in steps:
-        if visit(step.id):
-            issues.append(ValidationIssue(
-                code="DEPENDENCY_CYCLE",
-                severity="error",
-                message="Cycle detected in dependencies.",
-                step_id=step.id,
-                repairable=False
-            ))
-            break # only report once
+            elif inp in producers and not has_cycle:
+                producer_id = producers[inp]
+                if producer_id != step.id and producer_id not in reachability.get(step.id, set()):
+                    issues.append(ValidationIssue(
+                        code="UNREACHABLE_INPUT_PRODUCER",
+                        severity="error",
+                        message=f"Input {inp} is produced by {producer_id} but it is not an upstream dependency.",
+                        step_id=step.id,
+                        repairable=False
+                    ))
             
     # Substantive checks
     has_experiment = any(s.type == "experiment" for s in steps)

@@ -109,7 +109,7 @@ def test_cli_resume_path(mock_rm_cls, tmp_path):
         return res
     mock_rm.get_result = mock_get_result
 
-    result = runner.invoke(app, ["run", "test topic", "--resume", "test-task-789", "--no-interactive"])
+    result = runner.invoke(app, ["run", "--resume", "test-task-789", "--no-interactive"])
     assert result.exit_code == 0
     assert "test-task-789" in result.stdout
 
@@ -125,7 +125,7 @@ def test_cli_resume_unknown_path(mock_rm_cls, tmp_path):
         raise Exception("UNKNOWN_RUN")
     mock_rm.resume_run = mock_resume
     
-    result = runner.invoke(app, ["run", "test topic", "--resume", "unknown-task", "--no-interactive"])
+    result = runner.invoke(app, ["run", "--resume", "unknown-task", "--no-interactive"])
     assert result.exit_code != 0
     assert "Cannot resume run" in result.stdout
 

@@ -44,6 +44,10 @@ def render_markdown_plan(
     elif abstract_only_count > 0:
         lines.append(f"> ⚠️ **WARNING**: {abstract_only_count} out of {len(papers)} papers in this report were analyzed using only their abstracts.")
         lines.append("")
+        
+    if review_result and not review_result.passed:
+        lines.append("> ⚠️ **WARNING**: The reviewer rejected this plan due to logical flaws or unsupported claims. (This run completed in non-strict mode.)")
+        lines.append("")
     
     # ================================================================
     # Section 2: Field Summary
