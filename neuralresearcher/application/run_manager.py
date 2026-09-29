@@ -26,6 +26,8 @@ from neuralresearcher.application.cancellation import CancellationToken
 from neuralresearcher.logging import log_info, log_error, log_warning
 import re
 
+RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+
 class RunManager(ResearchService):
     def __init__(self, data_dir: str = "research", max_concurrent_runs: int = 2, max_result_bytes: int = 10 * 1024 * 1024):
         self.data_dir = Path(data_dir)
@@ -66,7 +68,7 @@ class RunManager(ResearchService):
         return self._run_locks[run_id]
 
     def _validate_run_id(self, run_id: str) -> None:
-        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", run_id):
+        if not RUN_ID_PATTERN.fullmatch(run_id):
             raise ValueError("INVALID_RUN_ID")
 
     def _task_done_callback(self, run_id: str, task: asyncio.Task):
@@ -268,7 +270,8 @@ class RunManager(ResearchService):
                     "final_state": OrchestratorState.HALTED.name,
                     "success": False,
                     "halt_code": HaltCode.CANCELLED.value,
-                    "failed_stage": "UNKNOWN", # Could be more precise if orchestrator sets it
+                    "failed_stage": manifest.get("current_stage", "UNKNOWN"),
+                    "error_message": "Run cancelled by request.",
                     "finished_at": datetime.datetime.now().isoformat()
                 })
                 store.save_manifest(manifest)

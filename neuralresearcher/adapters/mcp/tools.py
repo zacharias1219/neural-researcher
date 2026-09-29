@@ -48,8 +48,8 @@ def register_tools(server, service: ResearchService):
             logger.error(f"Error starting research: {e}")
             return ErrorResponse(error="CAPACITY_EXCEEDED" if "capacity" in str(e).lower() else "INVALID_ARGUMENT", message=str(e))
         except Exception as e:
-            logger.error(f"Internal error starting research: {e}")
-            return ErrorResponse(error="INTERNAL_ERROR", message="Failed to start run")
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_resume(
@@ -75,7 +75,8 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             return ErrorResponse(error=str(e).split(":")[0], message=str(e))
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message="Failed to resume run")
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_status(run_id: str) -> RunStatus | ErrorResponse:
@@ -85,7 +86,8 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message=str(e))
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_cancel(run_id: str) -> RunStatus | ErrorResponse:
@@ -95,7 +97,8 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message=str(e))
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_result(run_id: str) -> ResearchResult | ErrorResponse:
@@ -106,7 +109,8 @@ def register_tools(server, service: ResearchService):
             err = str(e)
             return ErrorResponse(error=err, message="Result unavailable" if err == "RUN_NOT_READY" else "Run not found")
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message=str(e))
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_list_runs(
@@ -121,7 +125,8 @@ def register_tools(server, service: ResearchService):
             limit = min(max(1, limit), 100)
             return await service.list_runs(status, provider, topic, created_after, limit)
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message=str(e))
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
     @server.tool()
     async def research_list_artifacts(run_id: str) -> list[ArtifactMetadata] | ErrorResponse:
@@ -131,4 +136,5 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
         except Exception as e:
-            return ErrorResponse(error="INTERNAL_ERROR", message=str(e))
+            logger.exception("Internal MCP operation failure")
+            return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")

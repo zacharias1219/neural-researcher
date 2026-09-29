@@ -329,3 +329,47 @@ async def test_max_papers_injected_to_config(manager, mocker):
     
     # We could also intercept the Orchestrator init to check config.max_papers
     # but checking the manifest is sufficient to show it was processed.
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        "../escape",
+        "valid/../../escape",
+        "abc.def",
+        "abc def",
+        "",
+        "a" * 65,
+        "normal-id\n../../escape",
+    ],
+)
+@pytest.mark.asyncio
+async def test_invalid_run_ids_rejected(manager, run_id):
+    with pytest.raises(ValueError, match="INVALID_RUN_ID"):
+        await manager.get_status(run_id)
+
+def test_offline_mode_skips_semantic_scholar(mocker):
+    from neuralresearcher.tools import search_papers_impl
+    
+    # We will mock requests to avoid network calls
+    class MockResponse:
+        def __init__(self, status_code, content):
+            self.status_code = status_code
+            self._content = content
+        @property
+        def content(self): return self._content
+        def json(self): return {}
+            
+    get_mock = mocker.patch("requests.Session.get", return_value=MockResponse(200, b"<feed></feed>"))
+    
+    # Test 1: Neither offline nor cassette
+    mocker.patch.dict(os.environ, {"NEURALRESEARCHER_OFFLINE": "0"}, clear=False)
+    from neuralresearcher.config import load_config
+    search_papers_impl(["test"], max_results=5, config=load_config())
+    assert any("semanticscholar" in call[0][0] for call in get_mock.call_args_list), "Should call Semantic Scholar"
+    
+    get_mock.reset_mock()
+    
+    # Test 2: Offline mode
+    mocker.patch.dict(os.environ, {"NEURALRESEARCHER_OFFLINE": "1"}, clear=False)
+    search_papers_impl(["test"], max_results=5, config=load_config())
+    assert not any("semanticscholar" in call[0][0] for call in get_mock.call_args_list), "Should not call Semantic Scholar when offline"

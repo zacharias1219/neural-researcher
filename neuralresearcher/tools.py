@@ -124,7 +124,9 @@ def search_papers_impl(keywords: List[str], max_results: int = None, config: Con
             "source": "arxiv"
         })
         
-    if not os.environ.get("ARXIV_CASSETTE_PATH"):
+    offline = os.environ.get("NEURALRESEARCHER_OFFLINE") == "1"
+    using_cassette = bool(os.environ.get("ARXIV_CASSETTE_PATH"))
+    if not offline and not using_cassette:
         # Try Semantic Scholar as a second source
         s2_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={formatted_query}&limit={max_results}&fields=title,authors,year,url,abstract"
         try:
