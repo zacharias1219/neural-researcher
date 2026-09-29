@@ -1,10 +1,10 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
 from neuralresearcher.context import AgentContext
 from neuralresearcher.config import Config
 from neuralresearcher.io.store import StateStore
-from neuralresearcher.state import TopicSpec, Paper, CoverageReport, CoverageCluster, ReviewResult
+from neuralresearcher.state import TopicSpec, Paper, CoverageReport, CoverageCluster, ReviewResult, TopicDomain
 from neuralresearcher.errors import WorkflowError
 
 @patch("neuralresearcher.orchestrator.run_topic_scope")
@@ -27,7 +27,7 @@ def test_orchestrator_state_transitions(
     assert orchestrator.state == OrchestratorState.INIT
     
     # Mock happy path for validations
-    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain="ML", subfields=[], keywords=["mamba"]))
+    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain=TopicDomain.MACHINE_LEARNING, subfields=[], keywords=["mamba"]))
     store.save_papers([
         Paper(id="p1", title="mamba paper", authors=[], venue="v", year=2024, url="", abstract=""),
         Paper(id="p2", title="mamba paper 2", authors=[], venue="v", year=2024, url="", abstract=""),
@@ -128,19 +128,24 @@ def test_orchestrator_reviewer_retry_exhausted_strict_mode(tmp_path):
 
 
 def test_guardrail_layer_1_topic_validation(tmp_path):
+    from pydantic import ValidationError
     store = StateStore(directory=str(tmp_path))
     config = Config()
     orchestrator = Orchestrator(topic="test", config=config, store=store, task_id="test_task")
     
     # Store out-of-scope topic spec
-    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain="Literature", subfields=[], keywords=[]))
+    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain=TopicDomain.OTHER, subfields=[], keywords=[]))
     
     with pytest.raises(WorkflowError, match="Topic is out-of-scope"):
         orchestrator._validate_topic()
         
     # Store in-scope topic spec
-    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain="Deep Learning", subfields=[], keywords=[]))
+    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain=TopicDomain.DEEP_LEARNING, subfields=[], keywords=[]))
     orchestrator._validate_topic() # Should not raise
+    
+    # Test unstructured short substring like 'finance' or 'literature'
+    with pytest.raises(ValidationError):
+        TopicSpec(id="1", raw_topic="t", domain="finance", subfields=[], keywords=[])
 
 
 def test_guardrail_layer_2_retrieval_validation(tmp_path):
@@ -148,7 +153,7 @@ def test_guardrail_layer_2_retrieval_validation(tmp_path):
     config = Config(min_papers=3, relevance_threshold=0.5)
     orchestrator = Orchestrator(topic="test", config=config, store=store, task_id="test_task")
     
-    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain="ML", subfields=[], keywords=["mamba", "optimization"]))
+    store.save_topic_spec(TopicSpec(id="1", raw_topic="t", domain=TopicDomain.MACHINE_LEARNING, subfields=[], keywords=["mamba", "optimization"]))
     
     # Case 1: Too few papers
     store.save_papers([Paper(id="p1", title="mamba", authors=[], venue="v", year=2024, url="", abstract="")])
@@ -201,4 +206,19 @@ def test_empty_plan_validation_silent_success(tmp_path):
     
     with pytest.raises(WorkflowError, match='Plan generation yielded no steps'):
         orchestrator._to_plan()
+
+def test_schema_error_maps_to_invalid_model_output(tmp_path):
+    from neuralresearcher.errors import SchemaError
+    from neuralresearcher.state import HaltCode
+    
+    store = StateStore(directory=str(tmp_path))
+    config = Config()
+    orchestrator = Orchestrator(topic="test", config=config, store=store, task_id="test_task")
+    
+    with patch("neuralresearcher.orchestrator.run_topic_scope", side_effect=SchemaError("Exhausted retries")):
+        result = orchestrator.run()
+        
+    assert not result.success
+    assert result.halt_code == HaltCode.INVALID_MODEL_OUTPUT
+    assert result.failed_stage == "INIT"
 

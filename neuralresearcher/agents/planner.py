@@ -5,8 +5,34 @@ import uuid
 
 from neuralresearcher.context import AgentContext
 from neuralresearcher.state import ResearchPlan, PlanStep
-from neuralresearcher.llm import call_llm
-from neuralresearcher.errors import SchemaError, WorkflowError
+from neuralresearcher.llm import generate_structured
+from neuralresearcher.errors import SchemaError
+from neuralresearcher.plan_validation import normalize_plan
+from pydantic import BaseModel, Field
+from typing import List, Literal, Dict
+
+class PlanOutput(BaseModel):
+    hypothesis: str
+    expected_contribution: str
+    target_venue: str
+    timeline_weeks: int
+    primary_gap_ids: List[str]
+
+class StepOutput(BaseModel):
+    label: str
+    description: str
+    type: Literal["data", "implementation", "experiment", "ablation", "analysis", "writing"]
+    risk_level: Literal["low", "medium", "high"]
+    inputs: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
+    dependencies: List[str] = Field(default_factory=list)
+    estimated_cost: Dict[str, float] = Field(default_factory=lambda: {"compute_hours": 0.0, "human_hours": 0.0})
+    assumptions: List[str] = Field(default_factory=list)
+    metrics: List[str] = Field(default_factory=list)
+
+class PlannerResponse(BaseModel):
+    plan: PlanOutput
+    steps: List[StepOutput]
 
 
 def run_planner(context: AgentContext) -> None:
@@ -18,6 +44,8 @@ def run_planner(context: AgentContext) -> None:
     
     # Gather rich context from the store
     papers = context.store.load_papers()
+    abstract_only = all(p.content_level != "FULL_TEXT" for p in papers) if papers else True
+    
     claims = context.store.load_claims()
     gaps = context.store.load_gaps()
     coverage_report = context.store.load_coverage_report()
@@ -58,31 +86,7 @@ def run_planner(context: AgentContext) -> None:
 
     system_prompt = (
         "You are a research planner agent. Create a DETAILED, EXECUTABLE research plan.\n\n"
-        "You must return a SINGLE valid JSON object with exactly two top-level keys: 'plan' and 'steps'.\n\n"
-        "Example JSON structure:\n"
-        "{\n"
-        '  "plan": {\n'
-        '    "hypothesis": "precise, testable hypothesis",\n'
-        '    "expected_contribution": "what this work contributes to the field",\n'
-        '    "target_venue": "target journal/conference (e.g., NeurIPS, ICML, JMLR)",\n'
-        '    "timeline_weeks": 12,\n'
-        '    "primary_gap_ids": ["gap IDs this plan addresses"]\n'
-        '  },\n'
-        '  "steps": [\n'
-        '    {\n'
-        '      "label": "concise but specific step name",\n'
-        '      "description": "detailed description of what to do and how",\n'
-        '      "type": "data",\n'
-        '      "risk_level": "low",\n'
-        '      "inputs": ["gap IDs, paper IDs, or prior step outputs this depends on (data steps can have empty inputs)"],\n'
-        '      "outputs": ["concrete artifacts: dataset paths, model checkpoints, scripts, figures, sections"],\n'
-        '      "dependencies": ["MUST be EXACTLY the ID string of the step (e.g. \\"step_01\\"). DO NOT use labels"],\n'
-        '      "estimated_cost": {"compute_hours": 0.0, "human_hours": 10.0},\n'
-        '      "assumptions": ["what must be true for this step to succeed"],\n'
-        '      "metrics": ["list of exact metrics to evaluate in this step (for experiments/ablations)"]\n'
-        '    }\n'
-        '  ]\n'
-        "}\n\n"
+        "You must return a valid JSON object matching the requested schema.\n\n"
         "CRITICAL REQUIREMENTS:\n"
         "- Data steps: create SEPARATE steps per domain (vision, speech, NLP, etc.)\n"
         "- Implementation steps: separate by component. If prototyping or initial training is involved, compute_hours MUST be > 0.\n"
@@ -94,7 +98,10 @@ def run_planner(context: AgentContext) -> None:
         "- EVERY step (except data steps) must have at least one input. EVERY step must have at least one output.\n"
         "- Use step_01, step_02, ... for cross-references in dependencies\n"
         "- Generate at least 12 steps for a thorough plan\n"
+        "If the analysis is based only on paper abstracts (ABSTRACT_ONLY), add an explicit warning to the plan description or hypothesis."
     )
+    
+    context_note = "NOTE: Analysis is based on FULL_TEXT." if not abstract_only else "NOTE: Analysis is ABSTRACT_ONLY. Warn the user."
     
     user_prompt = (
         f"Create an executable research plan for this direction:\n\n"
@@ -105,7 +112,8 @@ def run_planner(context: AgentContext) -> None:
         f"Identified Gaps:\n{gaps_block}\n\n"
         f"Key Claims:\n{claims_block}\n"
         f"{coverage_warnings}"
-        f"{feedback_block}"
+        f"{feedback_block}\n\n"
+        f"Context Info: {context_note}"
     )
     
     messages = [
@@ -113,18 +121,17 @@ def run_planner(context: AgentContext) -> None:
         {"role": "user", "content": user_prompt}
     ]
     
-    response = call_llm(
-        config=context.config,
+    data = generate_structured(
         messages=messages,
-        response_format={"type": "json_object"},
+        output_model=PlannerResponse,
+        config=context.config,
+        agent_name="planner",
         store=context.store,
-        task_id=context.task_id,
-        agent_name="planner"
+        task_id=context.task_id
     )
     
     try:
-        data = json.loads(response.content)
-        p_data = data.get("plan", {})
+        p_data = data.plan
         
         if context.config.seed is not None:
             plan_id = f"plan_{hashlib.sha1(f'{context.topic}_{context.config.seed}_plan'.encode()).hexdigest()[:8]}"
@@ -138,20 +145,21 @@ def run_planner(context: AgentContext) -> None:
         plan = ResearchPlan(
             id=plan_id,
             topic_spec_id=topic_spec_id,
-            hypothesis=p_data.get('hypothesis', direction.hypothesis),
-            expected_contribution=p_data.get('expected_contribution', direction.expected_contribution_type),
-            primary_gap_ids=p_data.get('primary_gap_ids', [direction.primary_gap_id]),
-            target_venue=p_data.get('target_venue', ''),
-            timeline_weeks=p_data.get('timeline_weeks', 0),
+            hypothesis=p_data.hypothesis,
+            expected_contribution=p_data.expected_contribution,
+            primary_gap_ids=p_data.primary_gap_ids,
+            target_venue=p_data.target_venue,
+            timeline_weeks=p_data.timeline_weeks,
         )
         
         # Parse steps with full metadata
-        s_data = data.get("steps", [])
+        s_data = data.steps
         if not s_data:
             raise SchemaError("Planner response contained no steps.")
             
         parsed_steps = []
-        for i, s in enumerate(s_data):
+        for i, s_obj in enumerate(s_data):
+            s = s_obj.model_dump()
             step_id = f"step_{(i + 1):02d}"
             
             # Sanitize dependencies (e.g., if LLM writes "step_01_collect_data", extract "step_01")
@@ -182,55 +190,7 @@ def run_planner(context: AgentContext) -> None:
             parsed_steps.append(step)
             
         # Deterministic Normalization Pass
-        if not plan.primary_gap_ids:
-            plan.primary_gap_ids = [direction.primary_gap_id]
-            
-        types_present = {s.type for s in parsed_steps}
-        if "experiment" not in types_present:
-            exp_step = PlanStep(
-                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Primary Experiment",
-                description="Run main experiments to test the hypothesis.", type="experiment", inputs=[plan.primary_gap_ids[0]], outputs=["experiment_results"],
-                estimated_cost={"compute_hours": 24.0, "human_hours": 8.0}, risk_level="medium"
-            )
-            parsed_steps.append(exp_step)
-            types_present.add("experiment")
-            
-        if "ablation" not in types_present:
-            abl_step = PlanStep(
-                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Ablation Studies",
-                description="Conduct ablation studies on key components.", type="ablation", inputs=["experiment_results"], outputs=["ablation_results"],
-                estimated_cost={"compute_hours": 12.0, "human_hours": 4.0}, risk_level="low"
-            )
-            parsed_steps.append(abl_step)
-            types_present.add("ablation")
-            
-        if "writing" not in types_present:
-            write_step = PlanStep(
-                id=f"step_{(len(parsed_steps) + 1):02d}", plan_id=plan_id, label="Manuscript Writing",
-                description="Draft the final manuscript including intro, methods, and results.", type="writing", inputs=["ablation_results", "experiment_results"], outputs=["final_paper.pdf"],
-                estimated_cost={"compute_hours": 0.0, "human_hours": 40.0}, risk_level="low"
-            )
-            parsed_steps.append(write_step)
-            
-        for step in parsed_steps:
-            if step.type in ("experiment", "data"):
-                if not step.inputs and step.type != "data":
-                    step.inputs = [plan.primary_gap_ids[0]]
-                if not step.outputs:
-                    step.outputs = [f"{step.id}_output"]
-            
-            if step.type == "experiment":
-                if step.estimated_cost.get("compute_hours", 0.0) <= 0.0:
-                    step.estimated_cost["compute_hours"] = 10.0
-
-        
-        # Compute resource summary
-        total_compute = sum(s.estimated_cost.get("compute_hours", 0.0) for s in parsed_steps)
-        total_human = sum(s.estimated_cost.get("human_hours", 0.0) for s in parsed_steps)
-        plan.resource_summary = {
-            "total_compute_hours": total_compute,
-            "total_human_hours": total_human,
-        }
+        plan, parsed_steps = normalize_plan(plan, parsed_steps)
         
         # Store step IDs in plan
         plan.steps = [s.id for s in parsed_steps]

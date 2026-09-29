@@ -11,6 +11,7 @@ from neuralresearcher.tools import (
     ToolError,
 )
 from neuralresearcher.llm import ToolCall
+from neuralresearcher.config import Config
 
 
 @pytest.fixture
@@ -23,16 +24,16 @@ def sample_arxiv_xml() -> bytes:
 def test_execute_tool_call_invalid_json():
     tc = ToolCall(id="1", function={"name": "search_papers", "arguments": "invalid json"})
     with pytest.raises(ToolError, match="Invalid JSON"):
-        execute_tool_call(tc)
+        execute_tool_call(tc, Config())
 
 
 def test_execute_tool_call_unknown_tool():
     tc = ToolCall(id="1", function={"name": "unknown_tool", "arguments": "{}"})
     with pytest.raises(ToolError, match="not implemented"):
-        execute_tool_call(tc)
+        execute_tool_call(tc, Config())
 
 
-@patch("neuralresearcher.tools.requests.get")
+@patch("requests.Session.get")
 def test_search_papers_parsing(mock_get, sample_arxiv_xml):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -40,7 +41,7 @@ def test_search_papers_parsing(mock_get, sample_arxiv_xml):
     mock_get.return_value = mock_resp
 
     with patch.dict(os.environ, {}, clear=True):
-        papers = search_papers_impl(keywords=["mamba", "optimization"], max_results=2)
+        papers = search_papers_impl(keywords=["mamba", "optimization"], max_results=2, config=Config())
 
     assert len(papers) == 2
     p1 = papers[0]
@@ -52,14 +53,14 @@ def test_search_papers_parsing(mock_get, sample_arxiv_xml):
     assert "linear-time" in p1["abstract"].lower()
 
 
-@patch("neuralresearcher.tools.requests.get")
+@patch("requests.Session.get")
 def test_search_papers_empty_keywords(mock_get):
-    papers = search_papers_impl(keywords=[])
+    papers = search_papers_impl(keywords=[], config=Config())
     assert papers == []
     mock_get.assert_not_called()
 
 
-@patch("neuralresearcher.tools.requests.get")
+@patch("requests.Session.get")
 def test_search_papers_api_error(mock_get):
     mock_resp = MagicMock()
     mock_resp.status_code = 503
@@ -67,15 +68,15 @@ def test_search_papers_api_error(mock_get):
 
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(ToolError, match="Failed to fetch from arXiv API: 503"):
-            search_papers_impl(keywords=["mamba"])
+            search_papers_impl(keywords=["mamba"], config=Config())
 
 
 def test_search_papers_cassette_replay():
     fixture_path = str(Path(__file__).parent / "fixtures" / "arxiv_sample.xml")
     with patch.dict(os.environ, {"ARXIV_CASSETTE_PATH": fixture_path}):
-        # requests.get should not be called when cassette is present
-        with patch("neuralresearcher.tools.requests.get") as mock_get:
-            papers = search_papers_impl(keywords=["mamba"])
+        # requests.Session.get should not be called when cassette is present
+        with patch("requests.Session.get") as mock_get:
+            papers = search_papers_impl(keywords=["mamba"], config=Config())
             mock_get.assert_not_called()
 
     assert len(papers) == 3
@@ -83,7 +84,7 @@ def test_search_papers_cassette_replay():
     assert papers[1]["id"] == "2405.21060v1"
 
 
-@patch("neuralresearcher.tools.requests.get")
+@patch("requests.Session.get")
 def test_fetch_paper_parsing(mock_get, sample_arxiv_xml):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -91,7 +92,7 @@ def test_fetch_paper_parsing(mock_get, sample_arxiv_xml):
     mock_get.return_value = mock_resp
 
     with patch.dict(os.environ, {}, clear=True):
-        paper = fetch_paper_impl(paper_id="2312.00752v1")
+        paper = fetch_paper_impl(paper_id="2312.00752v1", config=Config())
 
     assert paper["id"] == "2312.00752v1"
     assert "Mamba" in paper["title"]
@@ -108,7 +109,7 @@ def test_execute_tool_call_successful(sample_arxiv_xml):
                 "arguments": json.dumps({"keywords": ["mamba"], "max_results": 2}),
             },
         )
-        args, result_json = execute_tool_call(tc)
+        args, result_json = execute_tool_call(tc, Config())
         assert args["keywords"] == ["mamba"]
         data = json.loads(result_json)
         assert len(data) == 2

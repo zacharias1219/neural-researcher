@@ -1,22 +1,21 @@
 import hashlib
-import json
 import uuid
 from neuralresearcher.context import AgentContext
-from neuralresearcher.state import TopicSpec
-from neuralresearcher.llm import call_llm
-from neuralresearcher.errors import SchemaError
+from neuralresearcher.state import TopicSpec, TopicDomain
+from neuralresearcher.llm import generate_structured
+from pydantic import BaseModel, Field
+from typing import List, Dict
 
+
+class TopicSpecResponse(BaseModel):
+    domain: TopicDomain
+    subfields: List[str]
+    time_window: Dict[str, int] = Field(default_factory=lambda: {"start_year": 2000, "end_year": 2024})
+    scope_constraints: Dict[str, str] = Field(default_factory=dict)
+    keywords: List[str]
 
 def run_topic_scope(context: AgentContext) -> None:
-    system_prompt = (
-        "You are a specialized agent that takes a raw research topic and outputs a refined TopicSpec. "
-        "Return a JSON object strictly matching this schema:\n"
-        "{\n"
-        "  \"domain\": \"string (e.g., ML/CS)\",\n"
-        "  \"subfields\": [\"string\"],\n"
-        "  \"keywords\": [\"string\"]\n"
-        "}"
-    )
+    system_prompt = "You are a specialized agent that takes a raw research topic and outputs a refined TopicSpec."
     user_prompt = f"Raw Topic: {context.topic}"
     
     messages = [
@@ -24,26 +23,28 @@ def run_topic_scope(context: AgentContext) -> None:
         {"role": "user", "content": user_prompt}
     ]
     
-    response_format = {"type": "json_object"} 
-    
-    response = call_llm(
-        config=context.config,
+    data = generate_structured(
         messages=messages,
-        response_format=response_format,
+        output_model=TopicSpecResponse,
+        config=context.config,
+        agent_name="topic_scope",
         store=context.store,
-        task_id=context.task_id,
-        agent_name="topic_scope"
+        task_id=context.task_id
     )
     
-    try:
-        data = json.loads(response.content)
-        if context.config.seed is not None:
-            data['id'] = f"topic_{hashlib.sha1(f'{context.topic}_{context.config.seed}'.encode()).hexdigest()[:8]}"
-        else:
-            data['id'] = f"topic_{uuid.uuid4().hex[:8]}"
-        data['raw_topic'] = context.topic
-        topic_spec = TopicSpec(**data)
-        context.store.save_topic_spec(topic_spec)
-    except Exception as e:
-        raise SchemaError(f"Failed to parse TopicSpec: {str(e)}")
+    if context.config.seed is not None:
+        tid = f"topic_{hashlib.sha1(f'{context.topic}_{context.config.seed}'.encode()).hexdigest()[:8]}"
+    else:
+        tid = f"topic_{uuid.uuid4().hex[:8]}"
+        
+    topic_spec = TopicSpec(
+        id=tid,
+        raw_topic=context.topic,
+        domain=data.domain,
+        subfields=data.subfields,
+        time_window=data.time_window,
+        scope_constraints=data.scope_constraints,
+        keywords=data.keywords
+    )
+    context.store.save_topic_spec(topic_spec)
 

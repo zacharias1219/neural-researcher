@@ -1,5 +1,4 @@
 from typing import List, Optional
-from pathlib import Path
 
 from neuralresearcher.state import (
     ResearchPlan, PlanStep, Paper, Gap, Direction,
@@ -27,7 +26,7 @@ def render_markdown_plan(
     lines.append("# Research Plan")
     lines.append("")
     lines.append("## 1. Overview")
-    lines.append(f"**Note:** This plan focuses on a specific direction selected from multiple identified gaps in the broader topic.")
+    lines.append("**Note:** This plan focuses on a specific direction selected from multiple identified gaps in the broader topic.")
     lines.append("")
     lines.append(f"**Hypothesis:** {plan.hypothesis}")
     lines.append(f"**Expected Contribution:** {plan.expected_contribution}")
@@ -36,6 +35,15 @@ def render_markdown_plan(
     if plan.timeline_weeks > 0:
         lines.append(f"**Estimated Timeline:** {plan.timeline_weeks} weeks")
     lines.append("")
+    
+    from neuralresearcher.state import ContentLevel
+    abstract_only_count = sum(1 for p in papers if getattr(p, "content_level", None) == ContentLevel.ABSTRACT_ONLY)
+    if abstract_only_count == len(papers) and len(papers) > 0:
+        lines.append("> ⚠️ **WARNING**: The findings in this report rely exclusively on paper abstracts. Full-text analysis was not available.")
+        lines.append("")
+    elif abstract_only_count > 0:
+        lines.append(f"> ⚠️ **WARNING**: {abstract_only_count} out of {len(papers)} papers in this report were analyzed using only their abstracts.")
+        lines.append("")
     
     # ================================================================
     # Section 2: Field Summary
@@ -169,8 +177,8 @@ def render_markdown_plan(
                 if step.description:
                     lines.append(f"> {step.description}")
                     lines.append("")
-                lines.append(f"| Field | Value |")
-                lines.append(f"|-------|-------|")
+                lines.append("| Field | Value |")
+                lines.append("|-------|-------|")
                 lines.append(f"| **Status** | `{step.status}` |")
                 lines.append(f"| **Risk Level** | {step.risk_level} |")
                 lines.append(f"| **Dependencies** | {', '.join(f'`{d}`' for d in step.dependencies) if step.dependencies else 'None'} |")

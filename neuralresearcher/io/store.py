@@ -1,18 +1,25 @@
 import json
 import os
+import uuid
+import time
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 from neuralresearcher.state import (
     TopicSpec, Paper, Claim, Gap, Direction, PlanStep, ResearchPlan,
-    CoverageReport, CoverageCluster, ReviewResult
+    CoverageReport, ReviewResult
 )
-from neuralresearcher.errors import SchemaError
+from neuralresearcher.errors import StateCorruptionError
+
+STATE_VERSION = 1
 
 class StateStore:
-    def __init__(self, directory: str = "research"):
-        self.directory = Path(directory)
+    def __init__(self, directory: str = "research", run_id: Optional[str] = None):
+        self.base_directory = Path(directory)
+        self.run_id = run_id or str(uuid.uuid4())
+        self.directory = self.base_directory / "runs" / self.run_id
         self.state_file = self.directory / "state.json"
+        self.manifest_file = self.directory / "manifest.json"
         self._ensure_directory()
         
     def _ensure_directory(self) -> None:
@@ -20,19 +27,72 @@ class StateStore:
         (self.directory / "papers").mkdir(parents=True, exist_ok=True)
         (self.directory / "analysis").mkdir(parents=True, exist_ok=True)
         (self.directory / "transcripts").mkdir(parents=True, exist_ok=True)
+        (self.directory / "sources").mkdir(parents=True, exist_ok=True)
+        (self.directory / "logs").mkdir(parents=True, exist_ok=True)
+        (self.directory / "backups").mkdir(parents=True, exist_ok=True)
+        
+    def _migrate_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Migration hooks for older state versions."""
+        version = state.get("version", 0)
+        
+        if version == 0:
+            # v0 -> v1 migration
+            if "papers" in state:
+                for p in state["papers"]:
+                    p.setdefault("url", "")
+                    p.setdefault("abstract", "")
+            state["version"] = 1
+            
+        if state["version"] > STATE_VERSION:
+            raise StateCorruptionError(f"Unsupported state version: {state['version']}. Max supported is {STATE_VERSION}.")
+            
+        return state
         
     def _read_state(self) -> Dict[str, Any]:
         if not self.state_file.exists():
             return {}
         try:
             with open(self.state_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            return {}
+                state = json.load(f)
+                return self._migrate_state(state)
+        except json.JSONDecodeError as e:
+            # Preserve the corrupt file
+            corrupt_file = self.state_file.with_suffix(f".corrupt.{int(time.time())}.json")
+            import shutil
+            shutil.copy2(self.state_file, corrupt_file)
+            raise StateCorruptionError(f"State file is corrupt. Saved backup to {corrupt_file}. Error: {str(e)}")
             
     def _write_state(self, state: Dict[str, Any]) -> None:
-        with open(self.state_file, "w", encoding="utf-8") as f:
+        state["version"] = STATE_VERSION
+        
+        if self.state_file.exists():
+            import shutil
+            backup_file = self.directory / "backups" / f"state.backup.{int(time.time())}.json"
+            shutil.copy2(self.state_file, backup_file)
+            
+        tmp_file = self.state_file.with_suffix('.tmp')
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, self.state_file)
+
+    def save_manifest(self, manifest: Dict[str, Any]) -> None:
+        tmp_file = self.manifest_file.with_suffix('.tmp')
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, self.manifest_file)
+
+    def load_manifest(self) -> Dict[str, Any]:
+        if not self.manifest_file.exists():
+            return {}
+        try:
+            with open(self.manifest_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            raise StateCorruptionError(f"Manifest file is corrupt. Error: {str(e)}")
 
     # ---- TopicSpec ----
 

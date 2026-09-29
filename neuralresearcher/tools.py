@@ -8,6 +8,9 @@ import requests
 
 from neuralresearcher.llm import ToolCall
 from neuralresearcher.errors import ToolError
+from neuralresearcher.config import Config
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Schemas
 SEARCH_PAPERS_SCHEMA = {
@@ -48,7 +51,7 @@ FETCH_PAPER_SCHEMA = {
 TOOL_SCHEMAS = [SEARCH_PAPERS_SCHEMA, FETCH_PAPER_SCHEMA]
 
 
-def _fetch_arxiv_xml(url: str) -> bytes:
+def _fetch_arxiv_xml(url: str, config: Config) -> bytes:
     """Fetch XML from arXiv or replay from a local cassette fixture for determinism."""
     cassette_path = os.environ.get("ARXIV_CASSETTE_PATH")
     if not cassette_path and os.environ.get("NEURAL_RESEARCHER_OFFLINE") == "1":
@@ -60,7 +63,20 @@ def _fetch_arxiv_xml(url: str) -> bytes:
         with open(cassette_path, "rb") as f:
             return f.read()
 
-    response = requests.get(url)
+    session = requests.Session()
+    retries = Retry(
+        total=config.network_retries,
+        backoff_factor=1.0,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    
+    try:
+        response = session.get(url, timeout=config.tool_timeout_seconds)
+    except Exception as e:
+        raise ToolError(f"Network error fetching from arXiv API: {str(e)}")
+        
     if response.status_code != 200:
         raise ToolError(f"Failed to fetch from arXiv API: {response.status_code}")
 
@@ -73,7 +89,7 @@ def _fetch_arxiv_xml(url: str) -> bytes:
     return response.content
 
 
-def search_papers_impl(keywords: List[str], max_results: int = 5) -> List[Dict[str, Any]]:
+def search_papers_impl(keywords: List[str], max_results: int = 5, config: Config = None) -> List[Dict[str, Any]]:
     """Search papers via arXiv API or replay cassette."""
     terms = [urllib.parse.quote(term.strip()) for term in keywords if term.strip()]
     if not terms:
@@ -81,7 +97,7 @@ def search_papers_impl(keywords: List[str], max_results: int = 5) -> List[Dict[s
         
     formatted_query = "+AND+all:".join(terms)
     url = f"http://export.arxiv.org/api/query?search_query=all:{formatted_query}&start=0&max_results={max_results}"
-    xml_content = _fetch_arxiv_xml(url)
+    xml_content = _fetch_arxiv_xml(url, config)
         
     root = ET.fromstring(xml_content)
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
@@ -105,13 +121,37 @@ def search_papers_impl(keywords: List[str], max_results: int = 5) -> List[Dict[s
             "abstract": summary
         })
         
+    if not os.environ.get("ARXIV_CASSETTE_PATH"):
+        # Try Semantic Scholar as a second source
+        s2_url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={formatted_query}&limit={max_results}&fields=title,authors,year,url,abstract"
+        try:
+            session = requests.Session()
+            retries = Retry(total=config.network_retries, backoff_factor=1.0)
+            session.mount("https://", HTTPAdapter(max_retries=retries))
+            s2_response = session.get(s2_url, timeout=config.tool_timeout_seconds)
+            if s2_response.status_code == 200:
+                data = s2_response.json()
+                for entry in data.get("data", []):
+                    if any(p["title"].lower() == entry.get("title", "").lower() for p in papers):
+                        continue # Skip duplicates
+                    papers.append({
+                        "id": f"s2:{entry.get('paperId')}",
+                        "title": entry.get("title", ""),
+                        "authors": [a.get("name") for a in entry.get("authors", [])],
+                        "year": entry.get("year", 2024),
+                        "url": entry.get("url", ""),
+                        "abstract": entry.get("abstract", "") or "No abstract available."
+                    })
+        except Exception:
+            pass # Ignore semantic scholar errors
+        
     return papers[:max_results]
 
 
-def fetch_paper_impl(paper_id: str) -> Dict[str, Any]:
+def fetch_paper_impl(paper_id: str, config: Config = None) -> Dict[str, Any]:
     """Fetch specific paper from arXiv by ID or replay cassette."""
     url = f"http://export.arxiv.org/api/query?id_list={paper_id}"
-    xml_content = _fetch_arxiv_xml(url)
+    xml_content = _fetch_arxiv_xml(url, config)
         
     root = ET.fromstring(xml_content)
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
@@ -143,7 +183,7 @@ IMPLEMENTATIONS = {
 }
 
 
-def execute_tool_call(tool_call: ToolCall) -> Tuple[Dict[str, Any], str]:
+def execute_tool_call(tool_call: ToolCall, config: Config) -> Tuple[Dict[str, Any], str]:
     func_name = tool_call.function.get("name")
     if func_name not in IMPLEMENTATIONS:
         raise ToolError(f"Tool {func_name} is not implemented.")
@@ -155,7 +195,8 @@ def execute_tool_call(tool_call: ToolCall) -> Tuple[Dict[str, Any], str]:
         
     impl = IMPLEMENTATIONS[func_name]
     try:
-        result = impl(**args)
+        # Pass config to the implementation
+        result = impl(**args, config=config)
         return args, json.dumps(result)
     except Exception as e:
         raise ToolError(f"Error executing tool {func_name}: {str(e)}")

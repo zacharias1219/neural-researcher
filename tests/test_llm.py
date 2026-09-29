@@ -1,9 +1,10 @@
 import pytest
 import os
 from unittest.mock import patch, MagicMock
-from neuralresearcher.llm import call_llm, _get_groq_client, _get_openai_client, _get_anthropic_client
+from neuralresearcher.llm import call_llm, OpenAICompatibleAdapter, AnthropicAdapter
 from neuralresearcher.config import Config, LLMProvider
-from neuralresearcher.errors import LLMError
+from neuralresearcher.errors import LLMError, SchemaError
+from pydantic import BaseModel
 
 
 # ---------------------------------------------------------------------------
@@ -11,13 +12,16 @@ from neuralresearcher.errors import LLMError
 # ---------------------------------------------------------------------------
 
 def test_missing_groq_api_key():
+    from neuralresearcher.llm import _CLIENTS
+    _CLIENTS.clear()
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(LLMError, match="GROQ_API_KEY is not set."):
-            _get_groq_client()
+            adapter = OpenAICompatibleAdapter(LLMProvider.GROQ)
+            adapter.get_client()
 
 
 @patch("neuralresearcher.llm.time.sleep")
-@patch("neuralresearcher.llm._get_groq_client")
+@patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -40,14 +44,14 @@ def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
 
 
 @patch("neuralresearcher.llm.time.sleep")
-@patch("neuralresearcher.llm._get_groq_client")
+@patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_max_retries_exceeded(mock_get_client, mock_sleep):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
 
     mock_client.chat.completions.create.side_effect = Exception("Rate limit reached 429")
 
-    config = Config(provider=LLMProvider.GROQ, max_retries=2)
+    config = Config(provider=LLMProvider.GROQ, api_retries=2)
     with pytest.raises(LLMError, match="Error calling LLM API"):
         call_llm(config=config, messages=[])
 
@@ -62,10 +66,11 @@ def test_groq_max_retries_exceeded(mock_get_client, mock_sleep):
 def test_missing_openai_api_key():
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(LLMError, match="OPENAI_API_KEY is not set."):
-            _get_openai_client()
+            adapter = OpenAICompatibleAdapter(LLMProvider.OPENAI)
+            adapter.get_client()
 
 
-@patch("neuralresearcher.llm._get_openai_client")
+@patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_openai_call(mock_get_client):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -89,10 +94,11 @@ def test_openai_call(mock_get_client):
 def test_missing_anthropic_api_key():
     with patch.dict(os.environ, {}, clear=True):
         with pytest.raises(LLMError, match="ANTHROPIC_API_KEY is not set."):
-            _get_anthropic_client()
+            adapter = AnthropicAdapter()
+            adapter.get_client()
 
 
-@patch("neuralresearcher.llm._get_anthropic_client")
+@patch("neuralresearcher.llm.AnthropicAdapter.get_client")
 def test_anthropic_call(mock_get_client):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -126,7 +132,7 @@ def test_anthropic_call(mock_get_client):
         assert m["role"] != "system"
 
 
-@patch("neuralresearcher.llm._get_anthropic_client")
+@patch("neuralresearcher.llm.AnthropicAdapter.get_client")
 def test_anthropic_tool_use(mock_get_client):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -161,7 +167,7 @@ def test_anthropic_tool_use(mock_get_client):
     assert response.content is None  # No text blocks
 
 
-@patch("neuralresearcher.llm._get_anthropic_client")
+@patch("neuralresearcher.llm.AnthropicAdapter.get_client")
 def test_anthropic_structured_output_json_schema(mock_get_client):
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
@@ -194,4 +200,75 @@ def test_anthropic_structured_output_json_schema(mock_get_client):
     assert response.content == '{"domain": "ML", "subfields": ["NLP"]}'
     assert len(response.tool_calls) == 0
     assert response.usage.total_tokens == 40
+
+
+# ---------------------------------------------------------------------------
+# Structured generation tests
+# ---------------------------------------------------------------------------
+
+class DummyOutput(BaseModel):
+    name: str
+    age: int
+
+@patch("neuralresearcher.llm.call_llm")
+def test_generate_structured_success(mock_call_llm):
+    from neuralresearcher.llm import generate_structured
+    
+    mock_call_llm.return_value = MagicMock(content='{"name": "Alice", "age": 30}')
+    config = Config(provider=LLMProvider.OPENAI)
+    
+    result = generate_structured(
+        messages=[],
+        output_model=DummyOutput,
+        config=config,
+        agent_name="test"
+    )
+    
+    assert result.name == "Alice"
+    assert result.age == 30
+    assert mock_call_llm.call_count == 1
+
+
+@patch("neuralresearcher.llm.call_llm")
+def test_generate_structured_malformed_then_success(mock_call_llm):
+    from neuralresearcher.llm import generate_structured
+    
+    mock_call_llm.side_effect = [
+        MagicMock(content='{"name": "Alice"}'), # Missing age
+        MagicMock(content='{"name": "Alice", "age": 30}')
+    ]
+    
+    config = Config(provider=LLMProvider.OPENAI, schema_repair_attempts=2)
+    messages = [{"role": "user", "content": "Hello"}]
+    
+    result = generate_structured(
+        messages=messages,
+        output_model=DummyOutput,
+        config=config,
+        agent_name="test"
+    )
+    
+    assert result.name == "Alice"
+    assert result.age == 30
+    assert mock_call_llm.call_count == 2
+
+
+@patch("neuralresearcher.llm.call_llm")
+def test_generate_structured_repair_exhaustion(mock_call_llm):
+    from neuralresearcher.llm import generate_structured
+    
+    mock_call_llm.return_value = MagicMock(content='{"name": "Alice", "age": "thirty"}') # type error
+    
+    config = Config(provider=LLMProvider.OPENAI, schema_repair_attempts=2)
+    
+    with pytest.raises(SchemaError, match="Exhausted 2 schema repair attempts"):
+        generate_structured(
+            messages=[],
+            output_model=DummyOutput,
+            config=config,
+            agent_name="test"
+        )
+        
+    assert mock_call_llm.call_count == 3 # 1 initial + 2 retries
+
 

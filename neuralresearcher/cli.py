@@ -2,22 +2,21 @@ import os
 import typer
 from typing import Optional
 
-from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
-from rich.text import Text
 from rich import box
 
 from neuralresearcher.config import (
-    Config, LLMProvider, load_config,
+    LLMProvider, load_config,
     DEFAULT_MODELS, API_KEY_ENV_VARS, PROVIDER_DISPLAY_NAMES,
 )
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.orchestrator import Orchestrator
 from neuralresearcher.logging import (
-    console, log_info, log_error, log_success, print_banner,
+    console, log_info, log_error, log_warning, log_success, print_banner,
 )
+from neuralresearcher.application.run_manager import RunManager
 
 app = typer.Typer(
     name="neuralresearcher",
@@ -129,6 +128,9 @@ def run(
         True, "--interactive/--no-interactive", "-i/-I",
         help="Interactive provider & model selection (default: on).",
     ),
+    resume: Optional[str] = typer.Option(
+        None, "--resume", help="Resume an existing run ID."
+    ),
 ):
     """
     [bold green]Run[/bold green] the multi-agent research pipeline on a topic.
@@ -174,25 +176,55 @@ def run(
     console.print(Panel(summary, title="[bold]Run Configuration[/bold]", border_style="cyan", box=box.SIMPLE))
     console.print()
 
-    # --- Build & run ---
-    try:
-        config = load_config(
-            provider_override=resolved_provider,
-            model_override=resolved_model,
-            strict_override=strict,
-        )
-    except Exception as e:
-        log_error(str(e))
+    # --- Run via ResearchService ---
+    import asyncio
+    from neuralresearcher.application.models import StartResearchRequest, ResumeResearchRequest
+
+    manager = RunManager(data_dir="research")
+    
+    async def execute_cli_run():
+        if resume:
+            try:
+                handle = await manager.resume_run(ResumeResearchRequest(run_id=resume, provider=resolved_provider, model=resolved_model))
+                store_run_id = resume
+            except Exception as e:
+                log_error(f"Cannot resume run: {e}")
+                raise typer.Exit(code=1)
+        else:
+            req = StartResearchRequest(topic=topic, provider=resolved_provider, model=resolved_model, strict=strict)
+            handle = await manager.start_run(req)
+            store_run_id = handle.run_id
+
+        console.rule(f"[bold cyan]Pipeline Start (Run ID: {store_run_id})[/bold cyan]")
+        
+        # Poll for completion
+        while True:
+            status = await manager.get_status(store_run_id)
+            if status.terminal:
+                break
+            await asyncio.sleep(1)
+            
+        return await manager.get_result(store_run_id), store_run_id
+
+    result, run_id = asyncio.run(execute_cli_run())
+    
+    if result.success:
+        console.rule("[bold green]Pipeline Complete[/bold green]")
+        # artifact paths dict format is from MCP result
+        plan_uri = result.artifact_resource_uris.get("plan", "research_plan.md")
+        # Extract filename from URI
+        plan_file = plan_uri.split("/")[-1]
+        log_success(f"Research plan generated -> research/runs/{run_id}/{plan_file}")
+        raise typer.Exit(code=0)
+    else:
+        console.rule("[bold red]Pipeline Halted[/bold red]")
+        halt_code_val = result.halt_code if result.halt_code else "UNKNOWN"
+        log_error(f"Run {result.run_id} failed during {result.failed_stage} with code {halt_code_val}")
+        console.print("[dim]Artifacts preserved at:[/dim]")
+        for k, v in result.artifact_resource_uris.items():
+            console.print(f"  [dim]{k}: {v}[/dim]")
         raise typer.Exit(code=1)
 
-    store = StateStore(directory="research")
-    orchestrator = Orchestrator(topic=topic, config=config, store=store)
-
-    console.rule("[bold cyan]Pipeline Start[/bold cyan]")
-    orchestrator.run()
-    console.rule("[bold green]Pipeline Complete[/bold green]")
-
-    log_success("Research plan generated -> research/research_plan.md")
 
 
 @app.command()
@@ -240,6 +272,24 @@ def version():
     except Exception:
         v = "0.1.0 (dev)"
     console.print(f"  [bold cyan]neuralresearcher[/bold cyan] v{v}")
+
+@app.command()
+def mcp(
+    transport: str = typer.Option("stdio", help="Transport mode: stdio or streamable-http"),
+    host: str = typer.Option("127.0.0.1", help="Host for streamable-http transport"),
+    port: int = typer.Option(8000, help="Port for streamable-http transport"),
+    path: str = typer.Option("/mcp", help="Path for streamable-http transport"),
+):
+    """
+    [bold magenta]Start[/bold magenta] the MCP server.
+    """
+    try:
+        from neuralresearcher.adapters.mcp.server import start_mcp_server
+        start_mcp_server(transport=transport, host=host, port=port, path=path)
+    except ImportError as e:
+        log_error(f"MCP components are not installed. Install with 'pip install neuralresearcher[mcp]'. Detail: {e}")
+        raise typer.Exit(code=1)
+
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
-from pathlib import Path
-from typing import Dict, Any, List
+from typing import List
 
 from neuralresearcher.evals.core import EvalTask, Outcome
 from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
@@ -7,9 +6,21 @@ from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
 
 def grade_completion(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
     expect_halt = task.success_criteria.get("expect_halt", False)
+    expected_halt_code = task.success_criteria.get("expected_halt_code")
+    expected_failed_stage = task.success_criteria.get("expected_failed_stage")
     
     if expect_halt:
         if orchestrator.state == OrchestratorState.HALTED:
+            # Check halt code and stage if specified
+            manifest = orchestrator.store.load_manifest()
+            actual_halt_code = manifest.get("halt_code")
+            actual_failed_stage = manifest.get("failed_stage")
+            
+            if expected_halt_code and actual_halt_code != expected_halt_code:
+                return Outcome(score=0.0, passed=False, details=f"Expected halt code {expected_halt_code}, got {actual_halt_code}")
+            if expected_failed_stage and actual_failed_stage != expected_failed_stage:
+                return Outcome(score=0.0, passed=False, details=f"Expected failed stage {expected_failed_stage}, got {actual_failed_stage}")
+                
             return Outcome(score=1.0, passed=True, details="Halted as expected for negative task")
         else:
             return Outcome(score=0.0, passed=False, details=f"Expected HALTED, got {orchestrator.state}")
@@ -44,8 +55,18 @@ def grade_completion(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
 
 def grade_correctness(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
     expect_halt = task.success_criteria.get("expect_halt", False)
+    expected_halt_code = task.success_criteria.get("expected_halt_code")
+    expected_failed_stage = task.success_criteria.get("expected_failed_stage")
+
     if expect_halt:
         if orchestrator.state == OrchestratorState.HALTED:
+            manifest = orchestrator.store.load_manifest()
+            actual_halt_code = manifest.get("halt_code")
+            actual_failed_stage = manifest.get("failed_stage")
+            if expected_halt_code and actual_halt_code != expected_halt_code:
+                return Outcome(score=0.0, passed=False, details=f"Correctly halted but wrong code: got {actual_halt_code}")
+            if expected_failed_stage and actual_failed_stage != expected_failed_stage:
+                return Outcome(score=0.0, passed=False, details=f"Correctly halted but wrong stage: got {actual_failed_stage}")
             return Outcome(score=1.0, passed=True, details="Halted as expected for negative task")
         return Outcome(score=0.0, passed=False, details=f"Negative task failed to halt (got {orchestrator.state})")
         

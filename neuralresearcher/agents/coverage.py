@@ -1,64 +1,23 @@
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import List
 
 from neuralresearcher.context import AgentContext
 from neuralresearcher.state import CoverageCluster, CoverageReport
 from neuralresearcher.logging import log_info, log_warning
 
-# Fixed domain taxonomy for keyword-based clustering
-DOMAIN_TAXONOMY = {
-    "vision": [
-        "image", "vision", "visual", "cnn", "vit", "convolutional",
-        "object detection", "segmentation", "classification", "patch",
-        "imagenet", "coco", "cifar", "resnet", "pixel",
-    ],
-    "nlp": [
-        "language", "text", "nlp", "token", "tokenizer", "gpt",
-        "bert", "transformer", "lm", "translation", "sentiment",
-        "c4", "pile", "wikitext", "glue", "summarization",
-    ],
-    "speech": [
-        "audio", "speech", "acoustic", "asr", "tts",
-        "librispeech", "voxpopuli", "spectrogram", "mel",
-        "keyword spotting", "speaker", "phoneme",
-    ],
-    "rl": [
-        "reinforcement", "policy", "reward", "agent", "environment",
-        "q-learning", "ppo", "sac", "mujoco", "atari", "gymnasium",
-        "multi-agent", "exploration", "exploitation",
-    ],
-    "edge": [
-        "microcontroller", "mcu", "tinyml", "edge", "embedded",
-        "quantization", "pruning", "distillation", "low-power",
-        "arm", "cortex", "risc-v", "iot", "on-device",
-    ],
-    "time_series": [
-        "time series", "forecasting", "temporal", "sequence",
-        "autoregressive", "recurrent", "lstm", "solar", "electricity",
-        "weather", "anomaly detection",
-    ],
-}
+from neuralresearcher.llm import generate_structured
+from neuralresearcher.errors import SchemaError, WorkflowError
+from pydantic import BaseModel, Field
 
+class CoverageClusterOutput(BaseModel):
+    domain: str
+    paper_ids: List[str]
 
-def _classify_paper(paper, taxonomy: dict) -> list[str]:
-    """Assign a paper to one or more domains based on keyword matching."""
-    searchable = (paper.title + " " + paper.abstract).lower()
-    # Also include methods and datasets if populated
-    if paper.methods:
-        searchable += " " + " ".join(paper.methods).lower()
-    if paper.datasets:
-        searchable += " " + " ".join(paper.datasets).lower()
-    
-    matched_domains = []
-    for domain, keywords in taxonomy.items():
-        for kw in keywords:
-            if kw in searchable:
-                matched_domains.append(domain)
-                break  # one match per domain is enough
-    
-    return matched_domains if matched_domains else ["uncategorized"]
+class CoverageResponse(BaseModel):
+    clusters: List[CoverageClusterOutput]
+    warnings: List[str] = Field(default_factory=list)
 
 
 def run_coverage(context: AgentContext) -> None:
@@ -69,60 +28,69 @@ def run_coverage(context: AgentContext) -> None:
         log_info("Coverage agent: no papers to cluster.")
         return
     
-    # --- Cluster papers by domain ---
-    domain_to_papers: Dict[str, List[str]] = {}
-    for paper in papers:
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        for domain in domains:
-            domain_to_papers.setdefault(domain, []).append(paper.id)
+    topic_spec = context.store.load_topic_spec()
+    topic_context = f"Topic: {topic_spec.raw_topic} (Domain: {topic_spec.domain.value})" if topic_spec else "Unknown topic"
     
-    # --- Count claims per domain ---
-    paper_id_to_domains: Dict[str, List[str]] = {}
-    for domain, pids in domain_to_papers.items():
-        for pid in pids:
-            paper_id_to_domains.setdefault(pid, []).append(domain)
+    papers_block = "\n".join([
+        f"- ID: {p.id} | Title: {p.title} | Abstract snippet: {p.abstract[:200]}..."
+        for p in papers
+    ])
     
-    domain_claim_counts: Dict[str, int] = {}
-    for claim in claims:
-        domains_for_paper = paper_id_to_domains.get(claim.paper_id, ["uncategorized"])
-        for d in domains_for_paper:
-            domain_claim_counts[d] = domain_claim_counts.get(d, 0) + 1
+    claims_block = "\n".join([
+        f"- ID: {c.paper_id} | Type: {c.type} | Text: {c.text}"
+        for c in claims
+    ])
     
-    # --- Build CoverageCluster objects ---
+    system_prompt = (
+        "You are an expert academic reviewer. Cluster the provided papers into specific sub-domains relative to the research topic.\n"
+        "Return a JSON object with two keys: 'clusters' and 'warnings'.\n"
+        "'clusters' is a list of objects with 'domain' (string) and 'paper_ids' (list of string IDs).\n"
+        "'warnings' is a list of strings indicating any coverage gaps (e.g., missing critical sub-themes, thin coverage).\n"
+    )
+    
+    user_prompt = (
+        f"{topic_context}\n\n"
+        f"Papers:\n{papers_block}\n\n"
+        f"Claims:\n{claims_block}\n\n"
+        "Analyze the papers and claims, identify sub-domains relative to the topic, cluster the paper IDs, and report warnings if necessary."
+    )
+    
+    data = generate_structured(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        output_model=CoverageResponse,
+        config=context.config,
+        agent_name="coverage",
+        store=context.store,
+        task_id=context.task_id
+    )
+    
+    try:
+        raw_clusters = data.clusters
+        warnings = data.warnings
+    except Exception as e:
+        raise SchemaError(f"Failed to parse coverage JSON: {e}")
+        
+    if not raw_clusters:
+        raise WorkflowError("No coverage clusters generated.")
+        
+    # Build actual cluster objects
     clusters = []
-    for domain, paper_ids in sorted(domain_to_papers.items()):
-        clusters.append(CoverageCluster(
-            domain=domain,
-            paper_ids=sorted(list(set(paper_ids))),  # deduplicate and sort
-            claim_count=domain_claim_counts.get(domain, 0)
-        ))
     
-    # --- Flag coverage warnings ---
-    warnings = []
-    
-    # Check for domains with no papers at all
-    covered_domains = set(domain_to_papers.keys()) - {"uncategorized"}
-    all_taxonomy_domains = set(DOMAIN_TAXONOMY.keys())
-    uncovered = all_taxonomy_domains - covered_domains
-    for domain in sorted(uncovered):
-        warnings.append(f"No papers cover the '{domain}' domain — literature coverage may be incomplete.")
-    
-    # Check for thin coverage
-    for domain, paper_ids in sorted(domain_to_papers.items()):
-        if domain != "uncategorized" and len(set(paper_ids)) < 2:
-            warnings.append(f"Only {len(set(paper_ids))} paper(s) in '{domain}' domain — coverage may be thin.")
-    
-    # Check for missing claim types
-    claim_types_found = {c.type for c in claims}
-    if "limitation" not in claim_types_found:
-        warnings.append("No claims of type 'limitation' found — limitations may be under-represented.")
-    if "future_work" not in claim_types_found:
-        warnings.append("No claims of type 'future_work' found — future work directions not captured.")
-    
-    # Check for uncategorized papers
-    uncategorized_count = len(set(domain_to_papers.get("uncategorized", [])))
-    if uncategorized_count > 0:
-        warnings.append(f"{uncategorized_count} paper(s) could not be assigned to any domain.")
+    # Calculate claim counts per paper
+    paper_claims = {}
+    for c in claims:
+        paper_claims[c.paper_id] = paper_claims.get(c.paper_id, 0) + 1
+        
+    for rc in raw_clusters:
+        domain = rc.domain
+        pids = rc.paper_ids
+        
+        # Calculate claims for this cluster
+        claim_count = sum(paper_claims.get(pid, 0) for pid in pids)
+        clusters.append(CoverageCluster(domain=domain, paper_ids=pids, claim_count=claim_count))
     
     # Deterministic ID & timestamp if seed is set
     if context.config.seed is not None:

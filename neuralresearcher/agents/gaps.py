@@ -1,12 +1,25 @@
 import hashlib
-import json
 import uuid
 
 from neuralresearcher.context import AgentContext
 from neuralresearcher.state import Gap
-from neuralresearcher.llm import call_llm
-from neuralresearcher.errors import SchemaError, WorkflowError
-from neuralresearcher.logging import log_info, log_error
+from neuralresearcher.llm import generate_structured
+from neuralresearcher.errors import SchemaError
+from neuralresearcher.logging import log_info
+from pydantic import BaseModel, Field
+from typing import List, Literal, Dict
+
+class GapOutput(BaseModel):
+    description: str
+    gap_type: Literal["unexplored_axis", "limitation", "contradiction", "missing_combination"]
+    novelty_estimate: Literal["low", "medium", "high"]
+    feasibility_notes: str = ""
+    related_paper_ids: List[str] = Field(default_factory=list)
+    supporting_claim_ids: List[str] = Field(default_factory=list)
+    dimensions: Dict[str, str] = Field(default_factory=dict)
+
+class GapsResponse(BaseModel):
+    gaps: List[GapOutput]
 
 
 def run_gaps(context: AgentContext) -> None:
@@ -40,22 +53,7 @@ def run_gaps(context: AgentContext) -> None:
     valid_claim_ids = {c.id for c in claims}
         
     system_prompt = (
-        "You are a gap identification agent. Identify research gaps by analyzing the claims and papers provided.\n\n"
-        "Return a JSON object with a 'gaps' list. Each gap must have:\n"
-        "{\n"
-        '  "description": "Clear description of the gap",\n'
-        '  "gap_type": "unexplored_axis|limitation|contradiction|missing_combination",\n'
-        '  "novelty_estimate": "low|medium|high",\n'
-        '  "feasibility_notes": "How feasible is it to address this gap",\n'
-        '  "related_paper_ids": ["paper IDs from the provided papers that relate to this gap"],\n'
-        '  "supporting_claim_ids": ["claim IDs from the provided claims that support this gap"],\n'
-        '  "dimensions": {\n'
-        '    "domain": "e.g. vision, nlp, speech, rl, edge",\n'
-        '    "model": "e.g. Mamba, Transformer, SSM",\n'
-        '    "scale": "e.g. small, medium, large",\n'
-        '    "dataset": "e.g. ImageNet, LibriSpeech"\n'
-        "  }\n"
-        "}\n\n"
+        "You are a gap identification agent. Identify research gaps by analyzing the claims and papers provided.\n"
         "IMPORTANT: Only use paper IDs and claim IDs that appear in the provided data. "
         "Identify at least 3 gaps. Focus on gaps that represent genuine research opportunities."
     )
@@ -67,23 +65,23 @@ def run_gaps(context: AgentContext) -> None:
         {"role": "user", "content": user_prompt}
     ]
     
-    response = call_llm(
-        config=context.config,
+    data = generate_structured(
         messages=messages,
-        response_format={"type": "json_object"},
+        output_model=GapsResponse,
+        config=context.config,
+        agent_name="gaps",
         store=context.store,
-        task_id=context.task_id,
-        agent_name="gaps"
+        task_id=context.task_id
     )
     
     all_gaps = []
     try:
-        data = json.loads(response.content)
-        raw_gaps = data.get("gaps", [])
+        raw_gaps = data.gaps
         if not raw_gaps:
             raise SchemaError("Gaps response contained empty 'gaps' list.")
             
-        for idx, g in enumerate(raw_gaps):
+        for idx, g_obj in enumerate(raw_gaps):
+            g = g_obj.model_dump()
             if context.config.seed is not None:
                 g['id'] = f"gap_{hashlib.sha1(f'{context.topic}_{context.config.seed}_gap_{idx}'.encode()).hexdigest()[:8]}"
             else:

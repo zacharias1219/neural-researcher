@@ -1,9 +1,7 @@
 """Tests for Pydantic model serialization/deserialization with new fields."""
-import json
-import pytest
 from neuralresearcher.state import (
     PlanStep, ResearchPlan, CoverageCluster, CoverageReport,
-    ReviewResult, Paper, Claim, Gap, Direction, TopicSpec
+    ReviewResult, Paper, Claim, Gap
 )
 
 

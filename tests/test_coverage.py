@@ -1,73 +1,60 @@
-"""Tests for the coverage agent's domain clustering logic."""
 import pytest
-from neuralresearcher.state import Paper, Claim, CoverageCluster
-from neuralresearcher.agents.coverage import _classify_paper, DOMAIN_TAXONOMY
+from unittest.mock import patch
 
+from neuralresearcher.state import Paper, Claim, TopicSpec, TopicDomain
+from neuralresearcher.context import AgentContext
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.config import Config
+from neuralresearcher.errors import WorkflowError, SchemaError
+from neuralresearcher.agents.coverage import run_coverage, CoverageResponse, CoverageClusterOutput
 
-def _make_paper(id, title, abstract, methods=None, datasets=None):
-    return Paper(
-        id=id, title=title, authors=["Author"], venue="arXiv",
-        year=2024, url=f"http://test/{id}", abstract=abstract,
-        methods=methods or [], datasets=datasets or [],
+@pytest.fixture
+def tmp_store(tmp_path):
+    store = StateStore(directory=str(tmp_path / "research"))
+    store.save_topic_spec(TopicSpec(id="1", raw_topic="test", domain=TopicDomain.MACHINE_LEARNING, subfields=[], keywords=[]))
+    store.save_papers([
+        Paper(id="p1", title="title1", authors=[], venue="", year=2024, url="", abstract="abs1"),
+        Paper(id="p2", title="title2", authors=[], venue="", year=2024, url="", abstract="abs2")
+    ])
+    store.save_claims([
+        Claim(id="c1", paper_id="p1", type="result", text="t1", section="abstract", evidence_ref="text"),
+        Claim(id="c2", paper_id="p2", type="result", text="t2", section="abstract", evidence_ref="text")
+    ])
+    return store
+
+@patch("neuralresearcher.agents.coverage.generate_structured")
+def test_coverage_success(mock_gen, tmp_store):
+    mock_gen.return_value = CoverageResponse(
+        clusters=[CoverageClusterOutput(domain="sub1", paper_ids=["p1", "p2"])],
+        warnings=["warning 1"]
     )
+    
+    ctx = AgentContext(topic="test", config=Config(), store=tmp_store, task_id="test")
+    run_coverage(ctx)
+    
+    report = tmp_store.load_coverage_report()
+    assert report is not None
+    assert len(report.clusters) == 1
+    assert report.clusters[0].domain == "sub1"
+    assert report.clusters[0].claim_count == 2
+    assert len(report.warnings) == 1
+    assert report.warnings[0] == "warning 1"
 
+@patch("neuralresearcher.agents.coverage.generate_structured")
+def test_coverage_empty_clusters(mock_gen, tmp_store):
+    mock_gen.return_value = CoverageResponse(
+        clusters=[],
+        warnings=[]
+    )
+    
+    ctx = AgentContext(topic="test", config=Config(), store=tmp_store, task_id="test")
+    with pytest.raises(WorkflowError, match="No coverage clusters generated"):
+        run_coverage(ctx)
 
-class TestClassifyPaper:
-    def test_vision_paper(self):
-        paper = _make_paper("p1", "Vision Transformer for Image Classification",
-                           "We propose a ViT model for image classification on ImageNet.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "vision" in domains
-
-    def test_nlp_paper(self):
-        paper = _make_paper("p2", "Language Model Pretraining",
-                           "We train a transformer language model on the Pile dataset.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "nlp" in domains
-
-    def test_speech_paper(self):
-        paper = _make_paper("p3", "Keyword Spotting on MCUs",
-                           "We deploy an audio model for speech recognition on LibriSpeech.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "speech" in domains
-
-    def test_rl_paper(self):
-        paper = _make_paper("p4", "Multi-Agent Reinforcement Learning",
-                           "We use PPO for policy optimization in a multi-agent environment.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "rl" in domains
-
-    def test_edge_paper(self):
-        paper = _make_paper("p5", "TinyML Deployment",
-                           "We deploy a quantized model on an ARM Cortex-M microcontroller.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "edge" in domains
-
-    def test_multi_domain_paper(self):
-        """A paper about edge vision should match both domains."""
-        paper = _make_paper("p6", "Efficient Vision on MCU",
-                           "We run image classification on a microcontroller using quantization.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "vision" in domains
-        assert "edge" in domains
-
-    def test_uncategorized_paper(self):
-        """A paper with no matching keywords should be 'uncategorized'."""
-        paper = _make_paper("p7", "Novel Algebraic Topology Results",
-                           "We prove new theorems about homological algebra.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert domains == ["uncategorized"]
-
-    def test_methods_and_datasets_used_for_classification(self):
-        """Methods and datasets fields should also be searched."""
-        paper = _make_paper("p8", "Efficient Model",
-                           "We propose an efficient model.",
-                           methods=["Mamba SSM"], datasets=["LibriSpeech"])
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "speech" in domains
-
-    def test_time_series_paper(self):
-        paper = _make_paper("p9", "Forecasting with SSMs",
-                           "We apply state-space models to time series forecasting.")
-        domains = _classify_paper(paper, DOMAIN_TAXONOMY)
-        assert "time_series" in domains
+@patch("neuralresearcher.agents.coverage.generate_structured")
+def test_coverage_schema_error(mock_gen, tmp_store):
+    mock_gen.side_effect = SchemaError("Failed to parse coverage JSON: ...")
+    
+    ctx = AgentContext(topic="test", config=Config(), store=tmp_store, task_id="test")
+    with pytest.raises(SchemaError, match="Failed to parse coverage JSON"):
+        run_coverage(ctx)

@@ -90,4 +90,20 @@ def test_store_dedupe_papers(tmp_path: Path):
     store.save_papers([p1, p2])
     papers = store.load_papers()
     assert len(papers) == 1
+    assert len(papers) == 1
     assert "M1" in papers[0].methods
+
+def test_store_corrupt_state(tmp_path: Path):
+    from neuralresearcher.errors import StateCorruptionError
+    store = StateStore(directory=str(tmp_path))
+    # Create corrupt JSON
+    store.directory.mkdir(parents=True, exist_ok=True)
+    with open(store.state_file, "w", encoding="utf-8") as f:
+        f.write("{corrupted_json")
+    
+    with pytest.raises(StateCorruptionError):
+        store.load_papers()
+        
+    # Check that a backup was created
+    backups = list(store.directory.glob("state.corrupt.*.json"))
+    assert len(backups) == 1

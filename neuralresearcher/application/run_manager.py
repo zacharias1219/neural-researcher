@@ -1,0 +1,366 @@
+import asyncio
+import os
+import datetime
+from pathlib import Path
+from typing import Optional, Dict
+
+from pydantic import ValidationError
+
+from neuralresearcher.config import LLMProvider, load_config
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
+from neuralresearcher.state import RunResult as CoreRunResult, HaltCode
+from neuralresearcher.errors import NeuralResearcherError
+
+from neuralresearcher.application.models import (
+    StartResearchRequest,
+    ResumeResearchRequest,
+    RunHandle,
+    RunStatus,
+    ResearchResult,
+    RunSummary,
+    ArtifactMetadata,
+)
+from neuralresearcher.application.research_service import ResearchService
+from neuralresearcher.application.cancellation import CancellationToken
+from neuralresearcher.logging import log_info, log_error, log_warning
+
+class RunManager(ResearchService):
+    def __init__(self, data_dir: str = "research", max_concurrent_runs: int = 2):
+        self.data_dir = Path(data_dir)
+        self.max_concurrent_runs = max_concurrent_runs
+        self._semaphore = asyncio.Semaphore(max_concurrent_runs)
+        self._run_locks: Dict[str, asyncio.Lock] = {}
+        self._cancellation_tokens: Dict[str, CancellationToken] = {}
+        self._active_runs: set[str] = set()
+        
+        # Reconciliation on startup
+        self._reconcile_runs()
+
+    def _reconcile_runs(self):
+        runs_dir = self.data_dir / "runs"
+        if not runs_dir.exists():
+            return
+        
+        for run_id in os.listdir(runs_dir):
+            store = StateStore(directory=str(self.data_dir), run_id=run_id)
+            manifest = store.load_manifest()
+            if not manifest:
+                continue
+                
+            state = manifest.get("final_state")
+            if not state:
+                # Active but not running -> interrupted
+                manifest["final_state"] = OrchestratorState.HALTED.name
+                manifest["halt_code"] = HaltCode.INTERNAL_ERROR.value
+                manifest["failed_stage"] = "UNKNOWN"
+                manifest["success"] = False
+                store.save_manifest(manifest)
+
+    def _get_lock(self, run_id: str) -> asyncio.Lock:
+        if run_id not in self._run_locks:
+            self._run_locks[run_id] = asyncio.Lock()
+        return self._run_locks[run_id]
+
+    async def start_run(self, request: StartResearchRequest) -> RunHandle:
+        # We start by getting a new StateStore which generates a run_id
+        store = StateStore(directory=str(self.data_dir))
+        run_id = store.run_id
+        
+        manifest = store.load_manifest()
+        now = datetime.datetime.now().isoformat()
+        manifest.update({
+            "run_id": run_id,
+            "topic": request.topic,
+            "provider": request.provider.value,
+            "model": request.model or "",
+            "strict": request.strict,
+            "created_at": now,
+            "cancellation_requested": False
+        })
+        store.save_manifest(manifest)
+        
+        # Submit to background
+        asyncio.create_task(self._execute_run(run_id, request.topic, request.provider, request.model, request.strict))
+        
+        return RunHandle(
+            run_id=run_id,
+            topic=request.topic,
+            status="INIT",
+            current_stage=None,
+            created_at=now,
+            status_resource_uri=f"research://runs/{run_id}/status",
+            result_resource_uri=f"research://runs/{run_id}/result",
+            plan_resource_uri=f"research://runs/{run_id}/plan"
+        )
+
+    async def resume_run(self, request: ResumeResearchRequest) -> RunHandle:
+        async with self._get_lock(request.run_id):
+            if request.run_id in self._active_runs:
+                raise ValueError("RUN_ALREADY_ACTIVE")
+                
+            store = StateStore(directory=str(self.data_dir), run_id=request.run_id)
+            manifest = store.load_manifest()
+            if not manifest:
+                raise ValueError("UNKNOWN_RUN")
+                
+            if manifest.get("success"):
+                raise ValueError("RESUME_NOT_ALLOWED: Cannot resume a successful run")
+
+            # Reset terminal states
+            manifest.pop("final_state", None)
+            manifest.pop("success", None)
+            manifest.pop("halt_code", None)
+            manifest.pop("failed_stage", None)
+            manifest["cancellation_requested"] = False
+            
+            provider_val = request.provider.value if request.provider else manifest.get("provider", LLMProvider.GROQ.value)
+            model_val = request.model if request.model else manifest.get("model", "")
+            
+            manifest["provider"] = provider_val
+            manifest["model"] = model_val
+            store.save_manifest(manifest)
+            
+            provider_enum = LLMProvider(provider_val)
+            
+            asyncio.create_task(self._execute_run(
+                request.run_id, 
+                manifest.get("topic", "Unknown"), 
+                provider_enum, 
+                model_val, 
+                manifest.get("strict", False)
+            ))
+            
+            now = manifest.get("created_at", datetime.datetime.now().isoformat())
+            
+            return RunHandle(
+                run_id=request.run_id,
+                topic=manifest.get("topic", ""),
+                status="RESUMED",
+                current_stage=None,
+                created_at=now,
+                status_resource_uri=f"research://runs/{request.run_id}/status",
+                result_resource_uri=f"research://runs/{request.run_id}/result",
+                plan_resource_uri=f"research://runs/{request.run_id}/plan"
+            )
+
+    async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool):
+        async with self._get_lock(run_id):
+            if run_id in self._active_runs:
+                return
+            self._active_runs.add(run_id)
+            
+            cancel_token = CancellationToken()
+            self._cancellation_tokens[run_id] = cancel_token
+
+        try:
+            async with self._semaphore:
+                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                config = load_config(
+                    provider_override=provider,
+                    model_override=model if model else None,
+                    strict_override=strict
+                )
+                
+                manifest = store.load_manifest()
+                manifest["started_at"] = datetime.datetime.now().isoformat()
+                store.save_manifest(manifest)
+
+                orchestrator = Orchestrator(topic=topic, config=config, store=store, task_id=run_id)
+                # We will inject cancel_token to orchestrator later
+                orchestrator.cancel_token = cancel_token
+                orchestrator.context.cancel_token = cancel_token
+                
+                result = await asyncio.to_thread(orchestrator.run)
+                
+                async with self._get_lock(run_id):
+                    manifest = store.load_manifest()
+                    manifest.update({
+                        "final_state": result.final_state,
+                        "success": result.success,
+                        "halt_code": result.halt_code.value if result.halt_code else None,
+                        "failed_stage": result.failed_stage,
+                        "duration_seconds": manifest.get("duration_seconds", 0) + result.duration_seconds,
+                        "artifact_paths": result.artifact_paths,
+                        "finished_at": datetime.datetime.now().isoformat()
+                    })
+                    store.save_manifest(manifest)
+
+        except asyncio.CancelledError:
+            async with self._get_lock(run_id):
+                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                manifest = store.load_manifest()
+                manifest.update({
+                    "final_state": OrchestratorState.HALTED.name,
+                    "success": False,
+                    "halt_code": HaltCode.CANCELLED.value,
+                    "failed_stage": "UNKNOWN", # Could be more precise if orchestrator sets it
+                    "finished_at": datetime.datetime.now().isoformat()
+                })
+                store.save_manifest(manifest)
+        finally:
+            async with self._get_lock(run_id):
+                self._active_runs.discard(run_id)
+                self._cancellation_tokens.pop(run_id, None)
+
+    async def get_status(self, run_id: str) -> RunStatus:
+        store = StateStore(directory=str(self.data_dir), run_id=run_id)
+        if not store.directory.exists():
+            raise ValueError("UNKNOWN_RUN")
+            
+        manifest = store.load_manifest()
+        
+        success = manifest.get("success", False)
+        terminal = "final_state" in manifest
+        
+        return RunStatus(
+            run_id=run_id,
+            topic=manifest.get("topic", "Unknown"),
+            provider=manifest.get("provider", "Unknown"),
+            model=manifest.get("model", ""),
+            status=manifest.get("final_state") or "ACTIVE",
+            current_stage=manifest.get("final_state") or "ACTIVE",
+            created_at=manifest.get("created_at"),
+            started_at=manifest.get("started_at"),
+            finished_at=manifest.get("finished_at"),
+            success=success,
+            terminal=terminal,
+            halt_code=manifest.get("halt_code"),
+            failed_stage=manifest.get("failed_stage"),
+            error_message=None,
+            duration_seconds=manifest.get("duration_seconds", 0.0),
+            artifact_count=len(manifest.get("artifact_paths", {})),
+            cancellation_requested=manifest.get("cancellation_requested", False)
+        )
+
+    async def cancel_run(self, run_id: str) -> RunStatus:
+        async with self._get_lock(run_id):
+            store = StateStore(directory=str(self.data_dir), run_id=run_id)
+            if not store.directory.exists():
+                raise ValueError("UNKNOWN_RUN")
+                
+            manifest = store.load_manifest()
+            if "final_state" in manifest:
+                return await self.get_status(run_id)
+                
+            manifest["cancellation_requested"] = True
+            store.save_manifest(manifest)
+            
+            if run_id in self._cancellation_tokens:
+                self._cancellation_tokens[run_id].cancel()
+                
+        return await self.get_status(run_id)
+
+    async def get_result(self, run_id: str) -> ResearchResult:
+        store = StateStore(directory=str(self.data_dir), run_id=run_id)
+        if not store.directory.exists():
+            raise ValueError("UNKNOWN_RUN")
+            
+        manifest = store.load_manifest()
+        if "final_state" not in manifest:
+            raise ValueError("RUN_NOT_READY")
+            
+        return ResearchResult(
+            run_id=run_id,
+            final_state=manifest["final_state"],
+            success=manifest.get("success", False),
+            topic=manifest.get("topic", ""),
+            halt_code=manifest.get("halt_code"),
+            failed_stage=manifest.get("failed_stage"),
+            artifact_resource_uris={
+                k: f"research://runs/{run_id}/artifacts/{Path(v).name}"
+                for k, v in manifest.get("artifact_paths", {}).items()
+            }
+        )
+
+    async def list_runs(
+        self,
+        status: Optional[str] = None,
+        provider: Optional[str] = None,
+        topic: Optional[str] = None,
+        created_after: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[RunSummary]:
+        runs_dir = self.data_dir / "runs"
+        if not runs_dir.exists():
+            return []
+            
+        results = []
+        for run_id in os.listdir(runs_dir):
+            store = StateStore(directory=str(self.data_dir), run_id=run_id)
+            manifest = store.load_manifest()
+            if not manifest:
+                continue
+                
+            current_status = manifest.get("final_state", "ACTIVE")
+            
+            if status and current_status != status:
+                continue
+            if provider and manifest.get("provider") != provider:
+                continue
+            if topic and topic.lower() not in manifest.get("topic", "").lower():
+                continue
+            if created_after and manifest.get("created_at", "") < created_after:
+                continue
+                
+            results.append(RunSummary(
+                run_id=run_id,
+                topic=manifest.get("topic", "Unknown"),
+                provider=manifest.get("provider", "Unknown"),
+                status=current_status,
+                created_at=manifest.get("created_at")
+            ))
+            
+        results.sort(key=lambda x: x.created_at or "", reverse=True)
+        return results[:limit]
+
+    async def list_artifacts(self, run_id: str) -> list[ArtifactMetadata]:
+        store = StateStore(directory=str(self.data_dir), run_id=run_id)
+        if not store.directory.exists():
+            raise ValueError("UNKNOWN_RUN")
+            
+        manifest = store.load_manifest()
+        artifacts = []
+        for name, path_str in manifest.get("artifact_paths", {}).items():
+            p = Path(path_str)
+            if p.exists():
+                stat = p.stat()
+                artifacts.append(ArtifactMetadata(
+                    name=name,
+                    path=p.name,
+                    mime_type="text/markdown" if p.suffix == ".md" else "application/json",
+                    size_bytes=stat.st_size,
+                    modified_at=datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    resource_uri=f"research://runs/{run_id}/artifacts/{p.name}"
+                ))
+        return artifacts
+
+    async def read_artifact(self, run_id: str, artifact_name: str) -> bytes:
+        store = StateStore(directory=str(self.data_dir), run_id=run_id)
+        if not store.directory.exists():
+            raise ValueError("UNKNOWN_RUN")
+            
+        manifest = store.load_manifest()
+        paths = manifest.get("artifact_paths", {})
+        
+        target_path = None
+        for name, path_str in paths.items():
+            if Path(path_str).name == artifact_name:
+                target_path = Path(path_str)
+                break
+                
+        if not target_path or not target_path.exists():
+            # Strict artifact name check to prevent traversal
+            if ".." in artifact_name or "/" in artifact_name or "\\" in artifact_name:
+                raise ValueError("INVALID_ARGUMENT")
+            
+            fallback_path = store.directory / artifact_name
+            if fallback_path.exists() and fallback_path.is_file():
+                # Allow reading if it's in the run dir and valid
+                if fallback_path.parent != store.directory:
+                     raise ValueError("INVALID_ARGUMENT")
+                target_path = fallback_path
+            else:
+                raise ValueError("RESOURCE_NOT_FOUND")
+                
+        return target_path.read_bytes()

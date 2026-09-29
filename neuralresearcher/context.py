@@ -35,3 +35,4 @@ class AgentContext:
     topic: str
     task_id: str = "default_run"
     review_feedback: Optional[str] = None
+    cancel_token: Optional[Any] = None

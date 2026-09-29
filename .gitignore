@@ -218,3 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 PRD.md
 
+# Local test outputs and data directories
+pytest_output.txt
+research/
+venv-test/
+test_wheel_install.bat

@@ -1,5 +1,5 @@
 from enum import Enum, auto
-from typing import Optional
+import time
 
 from neuralresearcher.config import Config
 from neuralresearcher.context import AgentContext
@@ -11,8 +11,8 @@ from neuralresearcher.logging import (
     log_error,
     log_warning,
 )
-from neuralresearcher.errors import NeuralResearcherError, WorkflowError
-from neuralresearcher.state import ALLOWED_DOMAINS
+from neuralresearcher.errors import NeuralResearcherError, WorkflowError, SchemaError
+from neuralresearcher.state import HaltCode, RunResult
 from neuralresearcher.agents.topic_scope import run_topic_scope
 from neuralresearcher.agents.retrieval import run_retrieval
 from neuralresearcher.agents.reading import run_reading
@@ -45,6 +45,8 @@ class Orchestrator:
         self.store = store
         self.task_id = task_id
         self.state = OrchestratorState.INIT
+        self.cancel_token = None
+
         self.retry_count = 0
         self.context = AgentContext(
             store=self.store,
@@ -61,9 +63,18 @@ class Orchestrator:
         log_state_transition(self.state.name, new_state.name)
         self.state = new_state
 
-    def run(self) -> None:
+    def run(self) -> RunResult:
+        start_time = time.time()
+        halt_code = None
+        failed_stage = None
+        message = None
+        success = False
+
         try:
             while self.state not in (OrchestratorState.REPORT_READY, OrchestratorState.HALTED):
+                if self.cancel_token:
+                    self.cancel_token.check()
+
                 if self.state == OrchestratorState.INIT:
                     self._to_scoped()
                 elif self.state == OrchestratorState.SCOPED:
@@ -84,15 +95,49 @@ class Orchestrator:
                     self._to_report()
                 else:
                     break
+            if self.state == OrchestratorState.REPORT_READY:
+                success = True
         except WorkflowError as e:
             log_warning(str(e))
+            failed_stage = self.state.name
             self.set_state(OrchestratorState.HALTED)
+            halt_code = e.halt_code or HaltCode.INTERNAL_ERROR
+            message = str(e)
+        except SchemaError as e:
+            log_error(str(e))
+            failed_stage = self.state.name
+            self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.INVALID_MODEL_OUTPUT
+            message = str(e)
         except NeuralResearcherError as e:
             log_error(str(e))
+            failed_stage = self.state.name
             self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.INTERNAL_ERROR
+            message = str(e)
         except Exception as e:
             log_error(f"Unexpected error: {str(e)}")
+            failed_stage = self.state.name
             self.set_state(OrchestratorState.HALTED)
+            halt_code = HaltCode.INTERNAL_ERROR
+            message = str(e)
+
+        duration = time.time() - start_time
+        
+        return RunResult(
+            run_id=self.task_id,
+            final_state=self.state.name,
+            success=success,
+            halt_code=halt_code,
+            failed_stage=failed_stage,
+            message=message,
+            artifact_paths={
+                "state": str(self.store.state_file),
+                "plan": str(self.store.directory / "research_plan.md")
+            },
+            total_tokens=0, # Placeholder, can be populated if usage tracked
+            duration_seconds=duration
+        )
 
     def _validate_topic(self) -> None:
         """Layer 1: Validate topic domain."""
@@ -100,20 +145,14 @@ class Orchestrator:
         if not topic_spec:
             return
             
-        domain = topic_spec.domain.strip().lower()
-        allowed = {d.lower() for d in ALLOWED_DOMAINS}
-        
-        # Check if any allowed domain is in the predicted domain or vice versa
-        is_allowed = any(a in domain for a in allowed) or any(domain in a for a in allowed)
-        
-        if not is_allowed:
-            raise WorkflowError(f"Topic is out-of-scope. Predicted domain '{topic_spec.domain}' is not in allowed domains ({', '.join(ALLOWED_DOMAINS)}).")
+        if topic_spec.domain.value == "other":
+            raise WorkflowError("Topic is out-of-scope. Domain is not supported.", halt_code=HaltCode.OUT_OF_SCOPE)
 
     def _validate_retrieval(self) -> None:
         """Layer 2: Validate retrieved papers quantity and relevance."""
         papers = self.store.load_papers()
         if len(papers) < self.config.min_papers:
-            raise WorkflowError(f"Found {len(papers)} papers, which is below the minimum threshold ({self.config.min_papers}). The topic might be too narrow.")
+            raise WorkflowError(f"Found {len(papers)} papers, which is below the minimum threshold ({self.config.min_papers}). The topic might be too narrow.", halt_code=HaltCode.INSUFFICIENT_EVIDENCE)
             
         topic_spec = self.store.load_topic_spec()
         if not topic_spec:
@@ -130,7 +169,7 @@ class Orchestrator:
                 
         ratio = relevant_papers / len(papers)
         if ratio < self.config.relevance_threshold:
-            raise WorkflowError(f"Retrieval relevance too low ({ratio:.2f} < {self.config.relevance_threshold}). Retrieved papers do not match the topic keywords. Topic may be too specific or poorly phrased.")
+            raise WorkflowError(f"Retrieval relevance too low ({ratio:.2f} < {self.config.relevance_threshold}). Retrieved papers do not match the topic keywords. Topic may be too specific or poorly phrased.", halt_code=HaltCode.LOW_RETRIEVAL_RELEVANCE)
 
     def _validate_coverage(self) -> None:
         """Layer 3: Validate literature coverage."""
@@ -144,7 +183,7 @@ class Orchestrator:
         if num_clusters > 0:
             warning_ratio = num_warnings / num_clusters
             if warning_ratio > self.config.coverage_warning_threshold:
-                raise WorkflowError(f"Too many coverage warnings ({num_warnings} warnings for {num_clusters} clusters). Literature coverage is insufficient to form a valid plan.")
+                raise WorkflowError(f"Too many coverage warnings ({num_warnings} warnings for {num_clusters} clusters). Literature coverage is insufficient to form a valid plan.", halt_code=HaltCode.COVERAGE_FAILURE)
 
     def _to_scoped(self) -> None:
         log_agent_start("topic_scope")
@@ -189,7 +228,7 @@ class Orchestrator:
         """Validate that a plan was actually generated with steps."""
         plan, steps = self.store.load_plan()
         if not plan or not steps:
-            raise WorkflowError("Plan generation yielded no steps. The research pipeline failed to produce a valid plan.")
+            raise WorkflowError("Plan generation yielded no steps. The research pipeline failed to produce a valid plan.", halt_code=HaltCode.PLAN_VALIDATION_FAILURE)
 
     def _to_plan(self) -> None:
         log_agent_start("planner")
@@ -215,11 +254,11 @@ class Orchestrator:
             suggestions_text = "\n".join(f"- Suggestion: {sug}" for sug in suggestions)
             self.context.review_feedback = f"{issues_text}\n{suggestions_text}".strip()
 
-            if self.retry_count < self.config.max_retries:
+            if self.retry_count < self.config.plan_repair_attempts:
                 self.retry_count += 1
                 log_warning(
                     f"Plan review failed ({len(issues)} issue(s)). "
-                    f"Retrying planner with reviewer feedback (attempt {self.retry_count}/{self.config.max_retries})..."
+                    f"Retrying planner with reviewer feedback (attempt {self.retry_count}/{self.config.plan_repair_attempts})..."
                 )
                 self.set_state(OrchestratorState.DIRECTIONS_PROPOSED)
                 return
@@ -228,7 +267,7 @@ class Orchestrator:
                     if review_err:
                         raise review_err
                     raise WorkflowError(
-                        f"Plan failed review after {self.config.max_retries} attempts: {', '.join(issues)}"
+                        f"Plan failed review after {self.config.plan_repair_attempts} attempts: {', '.join(issues)}", halt_code=HaltCode.REVIEW_FAILURE
                     )
 
         self.context.review_feedback = None

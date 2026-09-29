@@ -1,0 +1,136 @@
+import json
+import logging
+from typing import Optional
+
+from neuralresearcher.application.research_service import ResearchService
+from neuralresearcher.application.models import StartResearchRequest, ResumeResearchRequest
+from neuralresearcher.config import LLMProvider
+
+logger = logging.getLogger(__name__)
+
+def register_tools(server, service: ResearchService):
+
+    @server.tool()
+    async def research_start(
+        topic: str,
+        provider: str = "groq",
+        model: Optional[str] = None,
+        strict: bool = False,
+        seed: Optional[int] = None,
+        max_papers: Optional[int] = None,
+        time_window_start: Optional[int] = None,
+        time_window_end: Optional[int] = None
+    ) -> str:
+        """Start a new research run asynchronously."""
+        try:
+            prov_enum = LLMProvider(provider)
+        except ValueError:
+            return json.dumps({"error": "INVALID_ARGUMENT", "message": f"Unknown provider {provider}"})
+            
+        req = StartResearchRequest(
+            topic=topic,
+            provider=prov_enum,
+            model=model,
+            strict=strict,
+            seed=seed,
+            max_papers=max_papers,
+            time_window_start=time_window_start,
+            time_window_end=time_window_end
+        )
+        try:
+            handle = await service.start_run(req)
+            return handle.model_dump_json()
+        except ValueError as e:
+            logger.error(f"Error starting research: {e}")
+            return json.dumps({"error": "CAPACITY_EXCEEDED" if "capacity" in str(e).lower() else "INVALID_ARGUMENT", "message": str(e)})
+        except Exception as e:
+            logger.error(f"Internal error starting research: {e}")
+            return json.dumps({"error": "INTERNAL_ERROR", "message": "Failed to start run"})
+
+    @server.tool()
+    async def research_resume(
+        run_id: str,
+        provider: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> str:
+        """Resume an explicitly selected persisted run."""
+        prov_enum = None
+        if provider:
+            try:
+                prov_enum = LLMProvider(provider)
+            except ValueError:
+                return json.dumps({"error": "INVALID_ARGUMENT", "message": f"Unknown provider {provider}"})
+                
+        req = ResumeResearchRequest(
+            run_id=run_id,
+            provider=prov_enum,
+            model=model
+        )
+        try:
+            handle = await service.resume_run(req)
+            return handle.model_dump_json()
+        except ValueError as e:
+            return json.dumps({"error": str(e).split(":")[0], "message": str(e)})
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": "Failed to resume run"})
+
+    @server.tool()
+    async def research_status(run_id: str) -> str:
+        """Return current or terminal status of a run."""
+        try:
+            status = await service.get_status(run_id)
+            return status.model_dump_json()
+        except ValueError as e:
+            return json.dumps({"error": str(e), "message": "Run not found"})
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
+
+    @server.tool()
+    async def research_cancel(run_id: str) -> str:
+        """Request cooperative cancellation."""
+        try:
+            status = await service.cancel_run(run_id)
+            return status.model_dump_json()
+        except ValueError as e:
+            return json.dumps({"error": str(e), "message": "Run not found"})
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
+
+    @server.tool()
+    async def research_result(run_id: str) -> str:
+        """Return a structured summary of a completed or failed run."""
+        try:
+            result = await service.get_result(run_id)
+            return result.model_dump_json()
+        except ValueError as e:
+            err = str(e)
+            return json.dumps({"error": err, "message": "Result unavailable" if err == "RUN_NOT_READY" else "Run not found"})
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
+
+    @server.tool()
+    async def research_list_runs(
+        status: Optional[str] = None,
+        provider: Optional[str] = None,
+        topic: Optional[str] = None,
+        created_after: Optional[str] = None,
+        limit: int = 50
+    ) -> str:
+        """List summaries of recent research runs."""
+        try:
+            limit = min(max(1, limit), 100)
+            runs = await service.list_runs(status, provider, topic, created_after, limit)
+            return json.dumps([r.model_dump() for r in runs])
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})
+
+    @server.tool()
+    async def research_list_artifacts(run_id: str) -> str:
+        """List artifacts generated by a run."""
+        try:
+            artifacts = await service.list_artifacts(run_id)
+            return json.dumps([a.model_dump() for a in artifacts])
+        except ValueError as e:
+            return json.dumps({"error": str(e), "message": "Run not found"})
+        except Exception as e:
+            return json.dumps({"error": "INTERNAL_ERROR", "message": str(e)})

@@ -1,11 +1,22 @@
 import hashlib
-import json
 import uuid
 
 from neuralresearcher.context import AgentContext
 from neuralresearcher.state import Direction
-from neuralresearcher.llm import call_llm
-from neuralresearcher.errors import SchemaError, WorkflowError
+from neuralresearcher.llm import generate_structured
+from neuralresearcher.errors import SchemaError
+from pydantic import BaseModel
+from typing import List, Literal
+
+class DirectionOutput(BaseModel):
+    primary_gap_id: str
+    hypothesis: str
+    justification: str
+    expected_contribution_type: str
+    novelty_assessment: Literal["low", "medium", "high"]
+
+class DirectionsResponse(BaseModel):
+    directions: List[DirectionOutput]
 
 
 def run_directions(context: AgentContext) -> None:
@@ -15,9 +26,6 @@ def run_directions(context: AgentContext) -> None:
         
     system_prompt = (
         "You are a research directions agent. Based on the gaps, propose research directions. "
-        "Return a JSON object with a 'directions' list. "
-        "Each direction must strictly have this structure: "
-        '{"primary_gap_id": "string", "hypothesis": "string", "justification": "string", "expected_contribution_type": "string", "novelty_assessment": "low|medium|high"}'
     )
     
     gaps_text = "\n".join([f"- {g.description} (id: {g.id})" for g in gaps[:5]])
@@ -28,23 +36,23 @@ def run_directions(context: AgentContext) -> None:
         {"role": "user", "content": user_prompt}
     ]
     
-    response = call_llm(
-        config=context.config,
+    data = generate_structured(
         messages=messages,
-        response_format={"type": "json_object"},
+        output_model=DirectionsResponse,
+        config=context.config,
+        agent_name="directions",
         store=context.store,
-        task_id=context.task_id,
-        agent_name="directions"
+        task_id=context.task_id
     )
     
     all_directions = []
     try:
-        data = json.loads(response.content)
-        raw_dirs = data.get("directions", [])
+        raw_dirs = data.directions
         if not raw_dirs:
             raise SchemaError("Directions response contained empty 'directions' list.")
             
-        for idx, d in enumerate(raw_dirs):
+        for idx, d_obj in enumerate(raw_dirs):
+            d = d_obj.model_dump()
             if context.config.seed is not None:
                 d['id'] = f"dir_{hashlib.sha1(f'{context.topic}_{context.config.seed}_dir_{idx}'.encode()).hexdigest()[:8]}"
             else:

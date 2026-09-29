@@ -1,7 +1,7 @@
 import os
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from neuralresearcher.errors import ConfigError
 
@@ -41,7 +41,10 @@ PROVIDER_DISPLAY_NAMES = {
 class Config(BaseModel):
     provider: LLMProvider = LLMProvider.GROQ
     model_name: str = "openai/gpt-oss-120b"
-    max_retries: int = 3
+    api_retries: int = 3
+    network_retries: int = 3
+    schema_repair_attempts: int = 3
+    plan_repair_attempts: int = 3
     tool_timeout_seconds: int = 60
     strict_mode: bool = False
     temperature: float = 0.0

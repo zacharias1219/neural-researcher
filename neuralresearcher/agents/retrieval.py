@@ -38,7 +38,7 @@ def run_retrieval(context: AgentContext) -> None:
     if response.tool_calls:
         for tc in response.tool_calls:
             try:
-                args, result_json = execute_tool_call(tc)
+                args, result_json = execute_tool_call(tc, context.config)
                 papers_data.extend(json.loads(result_json))
             except ToolError as e:
                 log_error(str(e))
