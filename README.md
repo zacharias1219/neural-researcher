@@ -52,12 +52,43 @@ neuralresearcher-evals --suite core --providers openai,anthropic
 
 ## MCP Server
 
-NeuralResearcher includes a Model Context Protocol (MCP) server.
+NeuralResearcher includes a robust Model Context Protocol (MCP) server for integration with MCP clients (e.g., Claude Desktop).
 
-- **stdio**: Default transport mode.
-- **HTTP**: Requires authentication `NEURALRESEARCHER_MCP_AUTH_TOKEN`. Can be started with `neuralresearcher-mcp --transport streamable-http`.
-- **Cancellation**: Cancellation is cooperative. Provider and HTTP timeouts are finite.
-- **Environment**: Use environment variables like `NEURALRESEARCHER_MCP_AUTH_TOKEN`, `NEURALRESEARCHER_DATA_DIR` to configure the MCP server.
+### Available Features
+- **Tools**: `start_run` (initiate research), `resume_run` (restarts a failed/interrupted run from `INIT` and clears incompatible artifacts), `cancel_run`, `get_run_status`, `list_runs`, `get_run_result`.
+- **Resources**:
+  - `research://runs/{run_id}/status`: Live JSON status of a run.
+  - `research://runs/{run_id}/plan`: The final generated research plan (Markdown).
+  - `research://runs/{run_id}/result`: The complete terminal result metadata.
+  - `research://runs/{run_id}/artifacts/{artifact_name}`: Additional artifacts generated during a run.
+- **Prompts**: `explore_topic` (guided prompt to kick off a research task).
+
+### Configuration & Limits
+- **Environment Variables**:
+  - `GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` (provider selection).
+  - `NEURALRESEARCHER_DATA_DIR`: Base directory for run state (default: `./research`).
+  - `NEURALRESEARCHER_MCP_AUTH_TOKEN`: Bearer token for HTTP authentication.
+  - `NEURALRESEARCHER_MCP_CONCURRENCY`: Max concurrent background runs (default: 2).
+  - `NEURALRESEARCHER_MCP_MAX_RESULT_BYTES`: Max bytes per artifact read (default: 10MB).
+- **Transports**:
+  - **stdio**: Default mode. Best for local GUI clients.
+  - **streamable-http**: Standalone HTTP server (`neuralresearcher-mcp --transport streamable-http`). Requires `NEURALRESEARCHER_MCP_AUTH_TOKEN` when bound to external interfaces.
+- **Cancellation**: Cancellation is cooperative. Background tasks gracefully halt between pipeline stages.
+
+### Example MCP Host Configuration (Claude Desktop)
+```json
+{
+  "mcpServers": {
+    "neuralresearcher": {
+      "command": "neuralresearcher-mcp",
+      "env": {
+        "GROQ_API_KEY": "gsk_...",
+        "NEURALRESEARCHER_DATA_DIR": "/path/to/my/workspace"
+      }
+    }
+  }
+}
+```
 
 ## Architecture
 

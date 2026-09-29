@@ -80,10 +80,6 @@ class RunManager(ResearchService):
             self._tasks.pop(run_id, None)
 
     async def start_run(self, request: StartResearchRequest) -> RunHandle:
-        if request.time_window_start and request.time_window_end:
-            if request.time_window_start > request.time_window_end:
-                raise ValueError("time_window_start cannot be greater than time_window_end")
-                
         # We start by getting a new StateStore which generates a run_id
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
@@ -276,6 +272,24 @@ class RunManager(ResearchService):
                     "finished_at": datetime.datetime.now().isoformat()
                 })
                 store.save_manifest(manifest)
+        except Exception as e:
+            from traceback import format_exc
+            log_error(f"Worker failure for run {run_id}: {format_exc()}")
+            try:
+                async with self._get_lock(run_id):
+                    store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                    manifest = store.load_manifest()
+                    manifest.update({
+                        "final_state": OrchestratorState.HALTED.name,
+                        "success": False,
+                        "halt_code": HaltCode.INTERNAL_ERROR.value,
+                        "failed_stage": manifest.get("current_stage", "BOOTSTRAP"),
+                        "error_message": f"Worker error: {type(e).__name__}: {str(e)}",
+                        "finished_at": datetime.datetime.now().isoformat()
+                    })
+                    store.save_manifest(manifest)
+            except Exception as inner_e:
+                log_error(f"Failed to persist worker failure for run {run_id}: {inner_e}")
         finally:
             async with self._get_lock(run_id):
                 self._active_runs.discard(run_id)
@@ -320,14 +334,14 @@ class RunManager(ResearchService):
                 raise ValueError("UNKNOWN_RUN")
                 
             manifest = store.load_manifest()
-            if "final_state" in manifest:
-                return await self.get_status(run_id)
+            manifest = store.load_manifest()
+            already_terminal = "final_state" in manifest
+            if not already_terminal:
+                manifest["cancellation_requested"] = True
+                store.save_manifest(manifest)
                 
-            manifest["cancellation_requested"] = True
-            store.save_manifest(manifest)
-            
-            if run_id in self._cancellation_tokens:
-                self._cancellation_tokens[run_id].cancel()
+                if run_id in self._cancellation_tokens:
+                    self._cancellation_tokens[run_id].cancel()
                 
         return await self.get_status(run_id)
 

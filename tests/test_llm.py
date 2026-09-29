@@ -23,14 +23,14 @@ def test_missing_groq_api_key():
 @patch("neuralresearcher.llm.time.sleep")
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
-    import openai
+    import groq
     import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
     
     request = httpx.Request("POST", "https://api.groq.com")
     response = httpx.Response(429, request=request)
-    rate_limit_err = openai.RateLimitError(
+    rate_limit_err = groq.RateLimitError(
         message="Rate limit reached 429", response=response, body=None
     )
 
@@ -54,14 +54,14 @@ def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
 @patch("neuralresearcher.llm.time.sleep")
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_groq_max_retries_exceeded(mock_get_client, mock_sleep):
-    import openai
+    import groq
     import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
     
     request = httpx.Request("POST", "https://api.groq.com")
     response = httpx.Response(429, request=request)
-    rate_limit_err = openai.RateLimitError(
+    rate_limit_err = groq.RateLimitError(
         message="Rate limit reached 429", response=response, body=None
     )
 

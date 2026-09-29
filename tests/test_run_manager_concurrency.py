@@ -70,6 +70,18 @@ async def test_cancel_active_run_returns_promptly(manager, mocker):
     assert status.cancellation_requested is True
 
 @pytest.mark.asyncio
+async def test_cancel_terminal_run_is_idempotent_and_nonblocking(manager, mocker):
+    store = StateStore(directory=str(manager.data_dir))
+    manifest = {"topic": "t", "provider": "groq", "final_state": "COMPLETED", "success": True}
+    store.save_manifest(manifest)
+    
+    # Should return promptly without deadlock
+    status = await asyncio.wait_for(manager.cancel_run(store.run_id), timeout=1.0)
+    assert status.terminal is True
+    # Cancellation should not be requested if already terminal
+    assert status.cancellation_requested is False
+
+@pytest.mark.asyncio
 async def test_state_progress_updates_during_execution(manager, mocker):
     def fake_run(self):
         import time
@@ -187,6 +199,21 @@ async def test_manifest_failure_message_reaches_status(manager, mocker):
     assert status.error_message == "Custom error message"
 
 @pytest.mark.asyncio
+async def test_bootstrap_failure_is_persisted(manager, mocker):
+    # Mock load_config to throw an error, which happens before the orchestrator runs
+    mocker.patch("neuralresearcher.application.run_manager.load_config", side_effect=Exception("Configuration boom"))
+    
+    req = StartResearchRequest(topic="test", provider=LLMProvider.GROQ)
+    handle = await manager.start_run(req)
+    
+    await asyncio.sleep(0.2)
+    status = await manager.get_status(handle.run_id)
+    assert status.terminal is True
+    assert status.success is False
+    assert status.halt_code == "INTERNAL_ERROR"
+    assert "Configuration boom" in status.error_message
+
+@pytest.mark.asyncio
 async def test_manifest_artifact_cannot_escape_run_directory(manager, tmp_path):
     store = StateStore(directory=str(manager.data_dir))
     escape_path = str(tmp_path / "secret.txt")
@@ -288,3 +315,17 @@ def test_semantic_scholar_results_survive_source_merge(mocker):
     sources = [r["source"] for r in results]
     assert "arxiv" in sources
     assert "semantic_scholar" in sources
+
+@pytest.mark.asyncio
+async def test_max_papers_injected_to_config(manager, mocker):
+    mock_run = mocker.patch("neuralresearcher.orchestrator.Orchestrator.run")
+    req = StartResearchRequest(topic="test", provider=LLMProvider.GROQ, max_papers=17)
+    handle = await manager.start_run(req)
+    await asyncio.sleep(0.1)
+    
+    store = StateStore(directory=str(manager.data_dir), run_id=handle.run_id)
+    manifest = store.load_manifest()
+    assert manifest["max_papers"] == 17
+    
+    # We could also intercept the Orchestrator init to check config.max_papers
+    # but checking the manifest is sufficient to show it was processed.

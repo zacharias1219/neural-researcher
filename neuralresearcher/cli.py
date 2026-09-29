@@ -129,7 +129,7 @@ def run(
         help="Interactive provider & model selection (default: on).",
     ),
     resume: Optional[str] = typer.Option(
-        None, "--resume", help="Resume an existing run ID."
+        None, "--resume", help="Restart a failed/interrupted run from INIT."
     ),
 ):
     """

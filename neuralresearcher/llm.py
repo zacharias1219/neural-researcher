@@ -136,13 +136,22 @@ class OpenAICompatibleAdapter:
                 response = client.chat.completions.create(**kwargs)
                 break
             except Exception as e:
-                import openai
-                if isinstance(e, (openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)):
-                    raise LLMError(f"Non-retryable API Error ({config.provider.value}): {str(e)}")
-                if isinstance(e, (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError)) or getattr(e, 'status_code', 200) >= 500 or getattr(e, 'status_code', 200) == 429:
-                    if attempt < config.api_retries:
-                        time.sleep((2 ** attempt) + random.uniform(0, 1))
-                        continue
+                if config.provider == LLMProvider.GROQ:
+                    import groq
+                    if isinstance(e, (groq.AuthenticationError, groq.PermissionDeniedError, groq.BadRequestError)):
+                        raise LLMError(f"Non-retryable API Error ({config.provider.value}): {str(e)}")
+                    if isinstance(e, (groq.APIConnectionError, groq.RateLimitError, groq.InternalServerError)) or getattr(e, 'status_code', 200) >= 500 or getattr(e, 'status_code', 200) == 429:
+                        if attempt < config.api_retries:
+                            time.sleep((2 ** attempt) + random.uniform(0, 1))
+                            continue
+                else:
+                    import openai
+                    if isinstance(e, (openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)):
+                        raise LLMError(f"Non-retryable API Error ({config.provider.value}): {str(e)}")
+                    if isinstance(e, (openai.APIConnectionError, openai.RateLimitError, openai.InternalServerError)) or getattr(e, 'status_code', 200) >= 500 or getattr(e, 'status_code', 200) == 429:
+                        if attempt < config.api_retries:
+                            time.sleep((2 ** attempt) + random.uniform(0, 1))
+                            continue
                 raise LLMError(f"Error calling LLM API ({config.provider.value}): {str(e)}")
 
         if response is None:

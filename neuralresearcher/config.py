@@ -1,7 +1,7 @@
 import os
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from neuralresearcher.errors import ConfigError
 
@@ -54,6 +54,7 @@ class Config(BaseModel):
     
     # Guardrail knobs
     min_papers: int = 3
+    max_papers: int = Field(default=5, ge=1, le=100)
     relevance_threshold: float = 0.2
     coverage_warning_threshold: float = 1.5
 
