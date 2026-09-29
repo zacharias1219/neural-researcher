@@ -29,6 +29,10 @@ def create_mcp_server(
 
 def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000, path: str = "/mcp"):
     import os
+    from neuralresearcher.logging import configure_console
+    if transport == "stdio":
+        configure_console(stderr=True)
+        
     settings = MCPSettings(transport=transport, host=host, port=port, path=path)
     
     # Configure logging
@@ -64,6 +68,9 @@ def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: in
     else:
         raise ValueError(f"Unknown transport: {settings.transport}")
 
-if __name__ == "__main__":
+def main():
     import typer
     typer.run(start_mcp_server)
+
+if __name__ == "__main__":
+    main()

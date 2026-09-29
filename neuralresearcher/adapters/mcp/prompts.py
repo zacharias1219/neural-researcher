@@ -6,14 +6,13 @@ def register_prompts(server):
     @server.prompt()
     async def create_research_plan(
         topic: str,
-        scope: Optional[str] = None,
-        time_window: Optional[str] = None,
-        emphasis: Optional[str] = None,
-        strict: Optional[str] = None
+        time_window_start: Optional[int] = None,
+        time_window_end: Optional[int] = None,
+        strict: Optional[bool] = None
     ) -> list[PromptMessage]:
         """Guide the host to create a research plan."""
         content = f"""To research "{topic}", please follow these steps:
-1. Call the `research_start` tool with the topic and any additional parameters (scope: {scope}, time_window: {time_window}, emphasis: {emphasis}, strict: {strict}).
+1. Call the `research_start` tool with the topic and any additional parameters (time_window_start: {time_window_start}, time_window_end: {time_window_end}, strict: {strict}).
 2. Preserve the returned run ID.
 3. Poll the `research_status` tool at reasonable intervals (e.g. every 5-10 seconds).
 4. Stop polling when the status indicates success, failure, or cancellation.

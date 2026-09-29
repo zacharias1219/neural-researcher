@@ -155,10 +155,12 @@ class Orchestrator:
         total_tokens = 0
         try:
             import json
-            for t_path in (self.store.directory / "transcripts").glob("*.json"):
+            for t_path in (self.store.directory / "transcripts").glob("*.jsonl"):
                 with open(t_path) as f:
-                    data = json.load(f)
-                total_tokens += data.get("usage", {}).get("total_tokens", 0)
+                    for line in f:
+                        if line.strip():
+                            data = json.loads(line)
+                            total_tokens += data.get("usage", {}).get("total_tokens", 0)
         except Exception:
             pass
             

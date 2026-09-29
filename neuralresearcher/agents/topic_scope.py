@@ -15,7 +15,14 @@ class TopicSpecResponse(BaseModel):
     keywords: List[str]
 
 def run_topic_scope(context: AgentContext) -> None:
+    manifest = context.store.load_manifest()
+    tw_start = manifest.get("time_window_start")
+    tw_end = manifest.get("time_window_end")
+    
     system_prompt = "You are a specialized agent that takes a raw research topic and outputs a refined TopicSpec."
+    if tw_start or tw_end:
+        system_prompt += f"\nConstraint: The user requested literature bounded between years {tw_start or 'Any'} and {tw_end or 'Any'}. Ensure the output time_window strictly respects this boundary."
+
     user_prompt = f"Raw Topic: {context.topic}"
     
     messages = [

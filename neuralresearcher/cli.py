@@ -147,35 +147,39 @@ def run(
         raise typer.Exit(code=1)
 
     # --- Resolve provider ---
-    resolved_provider: LLMProvider
+    resolved_provider: Optional[LLMProvider] = None
     if provider:
         try:
             resolved_provider = LLMProvider(provider.lower())
         except ValueError:
             log_error(f"Unknown provider '{provider}'. Choose from: groq, openai, anthropic, deepseek.")
             raise typer.Exit(code=1)
-    elif interactive:
+    elif not resume and interactive:
         resolved_provider = _select_provider_interactive()
-    else:
+    elif not resume:
         resolved_provider = LLMProvider.GROQ
 
     # --- Ensure API key ---
-    _ensure_api_key(resolved_provider)
+    if resolved_provider:
+        _ensure_api_key(resolved_provider)
 
     # --- Resolve model ---
-    resolved_model: str
+    resolved_model: Optional[str] = None
     if model:
         resolved_model = model
-    elif interactive and not provider:
+    elif interactive and not provider and not resume:
         resolved_model = _select_model_interactive(resolved_provider)
-    else:
+    elif not resume:
         resolved_model = DEFAULT_MODELS[resolved_provider]
 
     # --- Summary panel ---
     summary = Table.grid(padding=(0, 2))
-    summary.add_row("[dim]Topic:[/dim]", f"[bold bright_white]{topic}[/bold bright_white]")
-    summary.add_row("[dim]Provider:[/dim]", f"[bold cyan]{PROVIDER_DISPLAY_NAMES[resolved_provider]}[/bold cyan]")
-    summary.add_row("[dim]Model:[/dim]", f"[bold]{resolved_model}[/bold]")
+    summary.add_row("[dim]Topic:[/dim]", f"[bold bright_white]{topic or 'From stored run'}[/bold bright_white]")
+    
+    prov_str = PROVIDER_DISPLAY_NAMES[resolved_provider] if resolved_provider else "From stored run"
+    mod_str = resolved_model if resolved_model else "From stored run"
+    summary.add_row("[dim]Provider:[/dim]", f"[bold cyan]{prov_str}[/bold cyan]")
+    summary.add_row("[dim]Model:[/dim]", f"[bold]{mod_str}[/bold]")
     summary.add_row("[dim]Strict Mode:[/dim]", f"[bold]{'On' if strict else 'Off'}[/bold]")
     console.print(Panel(summary, title="[bold]Run Configuration[/bold]", border_style="cyan", box=box.SIMPLE))
     console.print()

@@ -116,6 +116,7 @@ class OpenAICompatibleAdapter:
             "temperature": config.temperature,
             "top_p": config.top_p,
             "max_tokens": config.max_tokens,
+            "timeout": 60.0,
         }
         if config.seed is not None:
             kwargs["seed"] = config.seed
@@ -200,6 +201,7 @@ class AnthropicAdapter:
             "max_tokens": config.max_tokens,
             "temperature": config.temperature,
             "top_p": config.top_p,
+            "timeout": 60.0,
         }
 
         anthropic_tools = []

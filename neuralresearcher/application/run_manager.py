@@ -79,6 +79,10 @@ class RunManager(ResearchService):
             self._tasks.pop(run_id, None)
 
     async def start_run(self, request: StartResearchRequest) -> RunHandle:
+        if request.time_window_start and request.time_window_end:
+            if request.time_window_start > request.time_window_end:
+                raise ValueError("time_window_start cannot be greater than time_window_end")
+                
         # We start by getting a new StateStore which generates a run_id
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
@@ -142,6 +146,16 @@ class RunManager(ResearchService):
             manifest.pop("halt_code", None)
             manifest.pop("failed_stage", None)
             manifest["cancellation_requested"] = False
+            
+            # Clear artifacts to restart from INIT
+            import shutil
+            for d in ["analysis", "transcripts", "papers", "sources"]:
+                target_dir = store.directory / d
+                if target_dir.exists():
+                    shutil.rmtree(target_dir)
+                    target_dir.mkdir(parents=True, exist_ok=True)
+            if store.state_file.exists():
+                store.state_file.unlink()
             
             provider_val = request.provider.value if request.provider else manifest.get("provider", LLMProvider.GROQ.value)
             model_val = request.model if request.model else manifest.get("model", "")
@@ -214,12 +228,16 @@ class RunManager(ResearchService):
                 orchestrator.cancel_token = cancel_token
                 orchestrator.context.cancel_token = cancel_token
 
+                loop = asyncio.get_running_loop()
                 def state_cb(state_name: str):
-                    m = store.load_manifest()
-                    if m:
-                        m["current_stage"] = state_name
-                        m["updated_at"] = datetime.datetime.now().isoformat()
-                        store.save_manifest(m)
+                    async def _update_state():
+                        async with self._get_lock(run_id):
+                            m = store.load_manifest()
+                            if m:
+                                m["current_stage"] = state_name
+                                m["updated_at"] = datetime.datetime.now().isoformat()
+                                store.save_manifest(m)
+                    asyncio.run_coroutine_threadsafe(_update_state(), loop)
                         
                 orchestrator.on_state_change = state_cb
                 
@@ -409,21 +427,22 @@ class RunManager(ResearchService):
         target_path = None
         for name, path_str in paths.items():
             if Path(path_str).name == artifact_name:
-                target_path = Path(path_str)
+                target_path = Path(path_str).resolve()
                 break
                 
         if not target_path or not target_path.exists():
-            # Strict artifact name check to prevent traversal
-            if ".." in artifact_name or "/" in artifact_name or "\\" in artifact_name:
-                raise ValueError("INVALID_ARGUMENT")
+            target_path = (store.directory / artifact_name).resolve()
             
-            fallback_path = store.directory / artifact_name
-            if fallback_path.exists() and fallback_path.is_file():
-                # Allow reading if it's in the run dir and valid
-                if fallback_path.parent != store.directory:
-                     raise ValueError("INVALID_ARGUMENT")
-                target_path = fallback_path
-            else:
-                raise ValueError("RESOURCE_NOT_FOUND")
+        try:
+            target_path.relative_to(store.directory.resolve())
+        except ValueError:
+            raise ValueError("INVALID_ARGUMENT")
+            
+        if not target_path.exists() or not target_path.is_file():
+            raise ValueError("RESOURCE_NOT_FOUND")
+            
+        config = load_config()
+        if target_path.stat().st_size > getattr(config, 'max_result_bytes', 10 * 1024 * 1024):
+            raise ValueError("ARTIFACT_TOO_LARGE")
                 
         return target_path.read_bytes()

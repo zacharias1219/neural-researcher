@@ -36,7 +36,7 @@ mcp = [
 
 [project.scripts]
 neuralresearcher = "neuralresearcher.cli:app"
-neuralresearcher-mcp = "neuralresearcher.adapters.mcp.server:start_mcp_server"
+neuralresearcher-mcp = "neuralresearcher.adapters.mcp.server:main"
 neuralresearcher-evals = "neuralresearcher.evals.runner:app"
 
 [tool.setuptools.packages.find]

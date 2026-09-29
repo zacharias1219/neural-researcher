@@ -21,10 +21,11 @@ if sys.platform == "win32":
     except Exception:
         _force_terminal = True  # fallback: let Rich handle it
 
-import os
-_use_stderr = os.environ.get("NEURALRESEARCHER_MCP_TRANSPORT") == "stdio"
+console = Console(theme=custom_theme, force_terminal=_force_terminal, stderr=False)
 
-console = Console(theme=custom_theme, force_terminal=_force_terminal, stderr=_use_stderr)
+def configure_console(stderr: bool) -> None:
+    global console
+    console = Console(theme=custom_theme, force_terminal=_force_terminal, stderr=stderr)
 
 
 def log_state_transition(old_state: str, new_state: str) -> None:

@@ -57,7 +57,7 @@ def register_tools(server, service: ResearchService):
         provider: Optional[str] = None,
         model: Optional[str] = None
     ) -> RunHandle | ErrorResponse:
-        """Resume an explicitly selected persisted run."""
+        """Resume an explicitly selected persisted run. Note: this currently restarts the run from INIT and clears incompatible artifacts."""
         prov_enum = None
         if provider:
             try:
