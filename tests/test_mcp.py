@@ -113,13 +113,57 @@ def test_stdio_subprocess_cleanliness(tmp_path, monkeypatch):
     p.stdin.flush()
 
     out_line = p.stdout.readline()
-    p.kill()
-
+    
     # Assert stdout is pure JSON-RPC
-    assert out_line.strip().startswith(
-        "{"), "Stdout contained non-JSON data: " + out_line
+    assert out_line.strip().startswith("{"), "Stdout contained non-JSON data: " + out_line
     response = json.loads(out_line)
     assert response.get("jsonrpc") == "2.0"
+    
+    # Send initialized notification
+    init_notif = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    }) + "\n"
+    p.stdin.write(init_notif)
+    p.stdin.flush()
+
+    # Tool discovery
+    list_tools_req = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list"
+    }) + "\n"
+    p.stdin.write(list_tools_req)
+    p.stdin.flush()
+
+    tools_line = p.stdout.readline()
+    assert tools_line.strip().startswith("{")
+    tools_resp = json.loads(tools_line)
+    assert "result" in tools_resp
+    assert "tools" in tools_resp["result"]
+    
+    # Status invocation (we just query a random ID, should fail gracefully or say not found)
+    call_req = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "research_status",
+            "arguments": {
+                "run_id": "dummy_run_id"
+            }
+        }
+    }) + "\n"
+    p.stdin.write(call_req)
+    p.stdin.flush()
+    
+    call_line = p.stdout.readline()
+    assert call_line.strip().startswith("{")
+    call_resp = json.loads(call_line)
+    assert "result" in call_resp
+    assert "content" in call_resp["result"]
+
+    p.kill()
 
 
 @pytest.mark.asyncio

@@ -592,3 +592,135 @@ async def test_shutdown_signals_tokens_and_waits(manager, mocker):
     assert status.terminal is True
     assert status.success is False
     assert status.error_message == "Run cancelled by request."
+
+
+@pytest.mark.asyncio
+async def test_late_cancelled_error_cannot_replace_interrupted(manager, mocker):
+    def fake_run(self):
+        import time
+        import asyncio
+        # Simulate a task that takes a long time
+        for _ in range(50):
+            if getattr(self.cancel_token, 'is_cancelled', False):
+                # wait a bit more to simulate late cancellation error after shutdown has marked it INTERRUPTED
+                time.sleep(0.5)
+                raise asyncio.CancelledError()
+            time.sleep(0.1)
+
+    mocker.patch(
+        "neuralresearcher.orchestrator.Orchestrator.run",
+        new=fake_run)
+
+    handle = await manager.start_run(StartResearchRequest(topic="test", provider=LLMProvider.GROQ))
+    await asyncio.sleep(0.1)
+
+    # shutdown with 0 grace period forces INTERRUPTED to be written immediately
+    await manager.shutdown(grace_period=0.0)
+    
+    # Let the worker raise CancelledError now
+    await asyncio.sleep(1.0)
+    
+    status = await manager.get_status(handle.run_id)
+    assert status.terminal is True
+    assert status.halt_code == "INTERRUPTED"
+
+
+@pytest.mark.asyncio
+async def test_state_callbacks_cannot_mutate_terminal_run(manager, mocker):
+    def fake_run(self):
+        # Fire state callback multiple times with delays
+        import time
+        self.on_state_change("INITIAL")
+        time.sleep(0.2)
+        self.on_state_change("SHOULD_BE_IGNORED")
+        time.sleep(0.1)
+        from neuralresearcher.state import RunResult
+        return RunResult(
+            run_id=self.task_id,
+            success=True,
+            final_state="COMPLETED",
+            duration_seconds=1.0)
+
+    mocker.patch(
+        "neuralresearcher.orchestrator.Orchestrator.run",
+        new=fake_run)
+
+    handle = await manager.start_run(StartResearchRequest(topic="test", provider=LLMProvider.GROQ))
+    await asyncio.sleep(0.1)
+    
+    # Force it to be terminal manually
+    store = StateStore(directory=str(manager.data_dir), run_id=handle.run_id)
+    manifest = store.load_manifest()
+    manifest["final_state"] = "HALTED"
+    manifest["halt_code"] = "INTERRUPTED"
+    store.save_manifest(manifest)
+    
+    # Wait for the run to finish
+    await asyncio.sleep(0.5)
+    
+    status = await manager.get_status(handle.run_id)
+    # Since we set final_state manually, the callback SHOULD_BE_IGNORED should not have mutated current_stage
+    assert status.current_stage != "SHOULD_BE_IGNORED"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_rejects_newly_submitted_runs(manager):
+    await manager.shutdown(grace_period=0.0)
+    with pytest.raises(ValueError, match="SERVICE_SHUTTING_DOWN"):
+        await manager.start_run(StartResearchRequest(topic="test", provider=LLMProvider.GROQ))
+    with pytest.raises(ValueError, match="SERVICE_SHUTTING_DOWN"):
+        await manager.resume_run(ResumeResearchRequest(run_id="fake_run"))
+
+
+@pytest.mark.asyncio
+async def test_resume_creates_distinct_run_with_resumed_from(manager, mocker):
+    store = StateStore(directory=str(manager.data_dir))
+    manifest = {"topic": "t", "provider": "groq", "final_state": "HALTED"}
+    store.save_manifest(manifest)
+
+    def fake_run(self):
+        from neuralresearcher.state import RunResult
+        return RunResult(
+            run_id=self.task_id,
+            success=True,
+            final_state="COMPLETED",
+            duration_seconds=1.0)
+
+    mocker.patch(
+        "neuralresearcher.orchestrator.Orchestrator.run",
+        new=fake_run)
+
+    req = ResumeResearchRequest(run_id=store.run_id)
+    handle = await manager.resume_run(req)
+    
+    assert handle.run_id != store.run_id
+    
+    await asyncio.sleep(0.1)
+    new_store = StateStore(directory=str(manager.data_dir), run_id=handle.run_id)
+    new_manifest = new_store.load_manifest()
+    assert new_manifest["resumed_from"] == store.run_id
+
+
+@pytest.mark.asyncio
+async def test_public_manifest_exposes_only_allowlisted_fields(manager, mocker):
+    store = StateStore(directory=str(manager.data_dir))
+    manifest = {
+        "run_id": store.run_id,
+        "topic": "test",
+        "provider": "groq",
+        "model": "llama",
+        "strict": False,
+        "secret_api_key": "12345",
+        "internal_path": "/var/tmp/secret"
+    }
+    store.save_manifest(manifest)
+
+    import json
+    public_data = await manager.read_public_resource(store.run_id, "manifest.json")
+    public_manifest = json.loads(public_data.decode('utf-8'))
+    
+    assert "secret_api_key" not in public_manifest
+    assert "internal_path" not in public_manifest
+    assert public_manifest["run_id"] == store.run_id
+    assert public_manifest["topic"] == "test"
+
