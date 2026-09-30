@@ -446,8 +446,17 @@ class RunManager(ResearchService):
         results = []
         for run_id in os.listdir(runs_dir):
             try:
-                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
+                store = self._open_existing_store(run_id)
                 manifest = store.load_manifest()
+            except StateCorruptionError:
+                results.append(RunSummary(
+                    run_id=run_id,
+                    topic="CORRUPTED RUN",
+                    provider="Unknown",
+                    status="CORRUPTED",
+                    created_at=None
+                ))
+                continue
             except Exception:
                 continue
                 

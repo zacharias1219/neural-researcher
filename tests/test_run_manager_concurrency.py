@@ -851,9 +851,9 @@ async def test_corrupt_run_does_not_prevent_listing_others(manager, mocker):
     (run_dir / "manifest.json").write_text("{bad-json}")
     
     runs = await manager.list_runs()
-    assert len(runs) >= 1
+    assert len(runs) >= 2
     assert any(r.topic == "good-run" for r in runs)
-    assert not any(r.run_id == "corrupt-run" for r in runs)
+    assert any(r.run_id == "corrupt-run" and r.status == "CORRUPTED" for r in runs)
 
 @pytest.mark.asyncio
 async def test_concurrent_updates_preserve_cancellation(manager, mocker):
@@ -895,3 +895,48 @@ async def test_concurrent_updates_preserve_cancellation(manager, mocker):
     status_after = await manager.get_status(handle.run_id)
     assert status_after.cancellation_requested is True
 
+@pytest.mark.asyncio
+async def test_cancel_run_releases_lock_before_status_lookup(manager, mocker):
+    from neuralresearcher.application.models import StartResearchRequest
+    from neuralresearcher.config import LLMProvider
+    
+    req = StartResearchRequest(topic="cancel-lock-test", provider=LLMProvider.GROQ)
+    def fake_run(*args, **kwargs):
+        from neuralresearcher.state import RunResult
+        from neuralresearcher.orchestrator import OrchestratorState
+        import time
+        time.sleep(0.5)
+        return RunResult(final_state=OrchestratorState.COMPLETED.name, success=True, failed_stage=None, message=None, duration_seconds=0.0, artifact_paths={})
+    
+    mocker.patch("neuralresearcher.orchestrator.Orchestrator.run", side_effect=fake_run)
+    handle = await manager.start_run(req)
+    
+    original_get_status = manager.get_status
+    lock_held_during_status = None
+    
+    async def hooked_get_status(run_id):
+        nonlocal lock_held_during_status
+        lock = manager._run_locks.get(run_id)
+        lock_held_during_status = lock.locked() if lock else False
+        return await original_get_status(run_id)
+        
+    mocker.patch.object(manager, "get_status", side_effect=hooked_get_status)
+    
+    await manager.cancel_run(handle.run_id)
+    assert lock_held_during_status is False
+
+@pytest.mark.asyncio
+async def test_open_existing_store_returns_unknown_only_for_missing_run(manager):
+    from neuralresearcher.errors import StateCorruptionError
+    # Missing -> ValueError("UNKNOWN_RUN")
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        manager._open_existing_store("missing-run-id")
+        
+    # Corrupted -> StateCorruptionError
+    run_id = "corrupt-store-test"
+    run_dir = manager.data_dir / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text("{bad}")
+    
+    with pytest.raises(StateCorruptionError):
+        manager._open_existing_store(run_id)
