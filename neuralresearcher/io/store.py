@@ -14,14 +14,14 @@ from neuralresearcher.errors import StateCorruptionError
 STATE_VERSION = 1
 
 class StateStore:
-    def __init__(self, directory: str = "research", run_id: Optional[str] = None):
+    def __init__(self, directory: str = "research", run_id: Optional[str] = None, *, create: bool = True):
         self.base_directory = Path(directory)
         self.run_id = run_id or str(uuid.uuid4())
         self.directory = self.base_directory / "runs" / self.run_id
         self.state_file = self.directory / "state.json"
         self.manifest_file = self.directory / "manifest.json"
-        self._ensure_directory()
-        
+        if create:
+            self._ensure_directory()
     def _ensure_directory(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         (self.directory / "papers").mkdir(parents=True, exist_ok=True)

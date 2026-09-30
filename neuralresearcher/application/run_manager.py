@@ -77,6 +77,26 @@ class RunManager(ResearchService):
         if not RUN_ID_PATTERN.fullmatch(run_id):
             raise ValueError("INVALID_RUN_ID")
 
+    def _open_existing_store(self, run_id: str) -> StateStore:
+        self._validate_run_id(run_id)
+        store = StateStore(
+            directory=str(self.data_dir),
+            run_id=run_id,
+            create=False,
+        )
+        if not store.directory.is_dir() or not store.manifest_file.is_file():
+            raise ValueError("UNKNOWN_RUN")
+        
+        try:
+            manifest = store.load_manifest()
+            if not manifest:
+                raise ValueError("UNKNOWN_RUN")
+        except Exception:
+            # Catch StateCorruptionError and any others
+            raise ValueError("UNKNOWN_RUN")
+            
+        return store
+
     def _task_done_callback(self, run_id: str, task: asyncio.Task):
         try:
             task.result()
@@ -155,8 +175,7 @@ class RunManager(ResearchService):
         if self.shutting_down:
             raise ValueError("SERVICE_SHUTTING_DOWN")
             
-        self._validate_run_id(request.run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=request.run_id)
+        store = self._open_existing_store(request.run_id)
         manifest = store.load_manifest()
         if not manifest:
             raise ValueError("UNKNOWN_RUN")
@@ -239,7 +258,7 @@ class RunManager(ResearchService):
 
         try:
             async with self._semaphore:
-                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
                 config = load_config(
                     provider_override=provider,
                     model_override=model if model else None,
@@ -303,7 +322,7 @@ class RunManager(ResearchService):
 
         except asyncio.CancelledError:
             async with self._get_lock(run_id):
-                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
                 manifest = store.load_manifest()
                 if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
                     return
@@ -321,7 +340,7 @@ class RunManager(ResearchService):
             log_error(f"Worker failure for run {run_id}: {format_exc()}")
             try:
                 async with self._get_lock(run_id):
-                    store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                    store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
                     manifest = store.load_manifest()
                     if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
                         return
@@ -341,12 +360,10 @@ class RunManager(ResearchService):
             async with self._get_lock(run_id):
                 self._active_runs.discard(run_id)
                 self._cancellation_tokens.pop(run_id, None)
+            self._run_locks.pop(run_id, None)
 
     async def get_status(self, run_id: str) -> RunStatus:
-        self._validate_run_id(run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=run_id)
-        if not store.directory.exists():
-            raise ValueError("UNKNOWN_RUN")
+        store = self._open_existing_store(run_id)
             
         manifest = store.load_manifest()
         
@@ -374,15 +391,10 @@ class RunManager(ResearchService):
         )
 
     async def cancel_run(self, run_id: str) -> RunStatus:
-        self._validate_run_id(run_id)
+        store = self._open_existing_store(run_id)
         async with self._get_lock(run_id):
-            store = StateStore(directory=str(self.data_dir), run_id=run_id)
-            if not store.directory.exists():
-                raise ValueError("UNKNOWN_RUN")
-                
             manifest = store.load_manifest()
-            already_terminal = "final_state" in manifest
-            if not already_terminal:
+            if "final_state" not in manifest:
                 manifest["cancellation_requested"] = True
                 store.save_manifest(manifest)
                 
@@ -392,10 +404,7 @@ class RunManager(ResearchService):
         return await self.get_status(run_id)
 
     async def get_result(self, run_id: str) -> ResearchResult:
-        self._validate_run_id(run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=run_id)
-        if not store.directory.exists():
-            raise ValueError("UNKNOWN_RUN")
+        store = self._open_existing_store(run_id)
             
         manifest = store.load_manifest()
         if "final_state" not in manifest:
@@ -462,10 +471,7 @@ class RunManager(ResearchService):
         return results[:limit]
 
     async def list_artifacts(self, run_id: str) -> list[ArtifactMetadata]:
-        self._validate_run_id(run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=run_id)
-        if not store.directory.exists():
-            raise ValueError("UNKNOWN_RUN")
+        store = self._open_existing_store(run_id)
             
         manifest = store.load_manifest()
         artifacts = []
@@ -496,10 +502,7 @@ class RunManager(ResearchService):
         if resource_name not in PUBLIC_FILES:
             raise ValueError("RESOURCE_NOT_FOUND")
             
-        self._validate_run_id(run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=run_id)
-        if not store.directory.exists():
-            raise ValueError("UNKNOWN_RUN")
+        store = self._open_existing_store(run_id)
             
         target_path = (store.directory / resource_name).resolve()
         
@@ -533,10 +536,7 @@ class RunManager(ResearchService):
         return target_path.read_bytes()
 
     async def read_generated_artifact(self, run_id: str, artifact_name: str) -> bytes:
-        self._validate_run_id(run_id)
-        store = StateStore(directory=str(self.data_dir), run_id=run_id)
-        if not store.directory.exists():
-            raise ValueError("UNKNOWN_RUN")
+        store = self._open_existing_store(run_id)
             
         manifest = store.load_manifest()
         paths = manifest.get("artifact_paths", {})
@@ -571,13 +571,14 @@ class RunManager(ResearchService):
             token.cancel()
         
         # 2. Wait for tasks to complete cooperatively
-        if self._tasks:
-            await asyncio.wait(self._tasks.values(), timeout=grace_period)
+        tasks = list(self._tasks.values())
+        if tasks:
+            await asyncio.wait(tasks, timeout=grace_period)
             
         # 3. Persist interrupted runs
         for run_id in list(self._active_runs):
             async with self._get_lock(run_id):
-                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
                 manifest = store.load_manifest()
                 if "final_state" not in manifest:
                     manifest.update({

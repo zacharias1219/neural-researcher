@@ -723,4 +723,64 @@ async def test_public_manifest_exposes_only_allowlisted_fields(manager, mocker):
     assert "internal_path" not in public_manifest
     assert public_manifest["run_id"] == store.run_id
     assert public_manifest["topic"] == "test"
+@pytest.mark.asyncio
+async def test_unknown_status_does_not_create_directory(manager):
+    run_id = "missing-run"
+    run_dir = manager.data_dir / "runs" / run_id
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.get_status(run_id)
+    assert not run_dir.exists()
+
+@pytest.mark.asyncio
+async def test_unknown_cancellation_does_not_create_directory(manager):
+    run_id = "missing-cancel"
+    run_dir = manager.data_dir / "runs" / run_id
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.cancel_run(run_id)
+    assert not run_dir.exists()
+
+@pytest.mark.asyncio
+async def test_unknown_result_lookup_does_not_create_directory(manager):
+    run_id = "missing-result"
+    run_dir = manager.data_dir / "runs" / run_id
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.get_result(run_id)
+    assert not run_dir.exists()
+
+@pytest.mark.asyncio
+async def test_unknown_artifact_lookup_does_not_create_directory(manager):
+    run_id = "missing-artifacts"
+    run_dir = manager.data_dir / "runs" / run_id
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.list_artifacts(run_id)
+    assert not run_dir.exists()
+
+@pytest.mark.asyncio
+async def test_unknown_public_resource_lookup_does_not_create_directory(manager):
+    run_id = "missing-public"
+    run_dir = manager.data_dir / "runs" / run_id
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.read_public_resource(run_id, "manifest.json")
+    assert not run_dir.exists()
+
+@pytest.mark.asyncio
+async def test_invalid_or_empty_manifests_are_not_valid_runs(manager):
+    run_id = "bad-manifest"
+    run_dir = manager.data_dir / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    # create empty manifest
+    (run_dir / "manifest.json").write_text("")
+    
+    with pytest.raises(ValueError, match="UNKNOWN_RUN"):
+        await manager.get_status(run_id)
+
+@pytest.mark.asyncio
+async def test_repeated_unknown_lookups_do_not_grow_run_locks(manager):
+    initial_locks = len(manager._run_locks)
+    for i in range(10):
+        try:
+            await manager.get_status(f"missing-{i}")
+        except ValueError:
+            pass
+    assert len(manager._run_locks) == initial_locks
 
