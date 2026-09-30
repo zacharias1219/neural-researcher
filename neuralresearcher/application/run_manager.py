@@ -10,7 +10,7 @@ from neuralresearcher.config import LLMProvider, load_config
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
 from neuralresearcher.state import RunResult as CoreRunResult, HaltCode
-from neuralresearcher.errors import NeuralResearcherError
+from neuralresearcher.errors import NeuralResearcherError, StateCorruptionError
 
 from neuralresearcher.application.models import (
     StartResearchRequest,
@@ -91,8 +91,10 @@ class RunManager(ResearchService):
             manifest = store.load_manifest()
             if not manifest:
                 raise ValueError("UNKNOWN_RUN")
+        except StateCorruptionError:
+            raise
         except Exception:
-            # Catch StateCorruptionError and any others
+            # Catch any others
             raise ValueError("UNKNOWN_RUN")
             
         return store
@@ -269,15 +271,16 @@ class RunManager(ResearchService):
                 if max_papers is not None:
                     config.max_papers = max_papers
                 
-                manifest = store.load_manifest()
-                manifest["started_at"] = datetime.datetime.now().isoformat()
-                manifest["provider"] = config.provider.value
-                manifest["model"] = config.model_name
-                if seed is not None: manifest["seed"] = seed
-                if max_papers is not None: manifest["max_papers"] = max_papers
-                if time_window_start is not None: manifest["time_window_start"] = time_window_start
-                if time_window_end is not None: manifest["time_window_end"] = time_window_end
-                store.save_manifest(manifest)
+                async with self._get_lock(run_id):
+                    manifest = store.load_manifest()
+                    manifest["started_at"] = datetime.datetime.now().isoformat()
+                    manifest["provider"] = config.provider.value
+                    manifest["model"] = config.model_name
+                    if seed is not None: manifest["seed"] = seed
+                    if max_papers is not None: manifest["max_papers"] = max_papers
+                    if time_window_start is not None: manifest["time_window_start"] = time_window_start
+                    if time_window_end is not None: manifest["time_window_end"] = time_window_end
+                    store.save_manifest(manifest)
 
                 orchestrator = Orchestrator(topic=topic, config=config, store=store, task_id=run_id)
                 # We will inject cancel_token to orchestrator later
@@ -360,7 +363,6 @@ class RunManager(ResearchService):
             async with self._get_lock(run_id):
                 self._active_runs.discard(run_id)
                 self._cancellation_tokens.pop(run_id, None)
-            self._run_locks.pop(run_id, None)
 
     async def get_status(self, run_id: str) -> RunStatus:
         store = self._open_existing_store(run_id)
@@ -443,8 +445,12 @@ class RunManager(ResearchService):
             
         results = []
         for run_id in os.listdir(runs_dir):
-            store = StateStore(directory=str(self.data_dir), run_id=run_id)
-            manifest = store.load_manifest()
+            try:
+                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
+                manifest = store.load_manifest()
+            except Exception:
+                continue
+                
             if not manifest:
                 continue
                 
