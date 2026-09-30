@@ -2,7 +2,7 @@ import secrets
 import logging
 from typing import Callable, Awaitable
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.auth_token = auth_token
 
-    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]) -> JSONResponse:
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             return JSONResponse({"error": "UNAUTHORIZED", "message": "Missing or invalid authorization header"}, status_code=401)

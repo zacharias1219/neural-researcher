@@ -22,7 +22,11 @@ def sample_arxiv_xml() -> bytes:
 
 
 def test_execute_tool_call_invalid_json():
-    tc = ToolCall(id="1", function={"name": "search_papers", "arguments": "invalid json"})
+    tc = ToolCall(
+        id="1",
+        function={
+            "name": "search_papers",
+            "arguments": "invalid json"})
     with pytest.raises(ToolError, match="Invalid JSON"):
         execute_tool_call(tc, Config())
 
@@ -41,7 +45,12 @@ def test_search_papers_parsing(mock_get, sample_arxiv_xml):
     mock_get.return_value = mock_resp
 
     with patch.dict(os.environ, {}, clear=True):
-        papers = search_papers_impl(keywords=["mamba", "optimization"], max_results=2, config=Config())
+        papers = search_papers_impl(
+            keywords=[
+                "mamba",
+                "optimization"],
+            max_results=2,
+            config=Config())
 
     assert len(papers) == 2
     p1 = papers[0]

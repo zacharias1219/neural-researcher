@@ -8,14 +8,19 @@ from neuralresearcher.state import (
 class TestPlanStep:
     def test_new_fields_have_defaults(self):
         """PlanStep should work with just the required fields."""
-        step = PlanStep(id="s1", label="Test step", type="experiment", risk_level="low")
+        step = PlanStep(
+            id="s1",
+            label="Test step",
+            type="experiment",
+            risk_level="low")
         assert step.plan_id == ""
         assert step.description == ""
         assert step.status == "pending"
         assert step.inputs == []
         assert step.outputs == []
         assert step.dependencies == []
-        assert step.estimated_cost == {"compute_hours": 0.0, "human_hours": 0.0}
+        assert step.estimated_cost == {
+            "compute_hours": 0.0, "human_hours": 0.0}
         assert step.assumptions == []
 
     def test_full_fields_roundtrip(self):
@@ -27,12 +32,18 @@ class TestPlanStep:
             description="Train the M3 model on ImageNet-21k at base scale",
             type="experiment",
             status="in_progress",
-            inputs=["gap_x1", "data/imagenet21k_preprocessed"],
+            inputs=[
+                "gap_x1",
+                "data/imagenet21k_preprocessed"],
             outputs=["checkpoints/m3_imagenet_base/"],
             dependencies=["step_00"],
-            estimated_cost={"compute_hours": 48.0, "human_hours": 2.0},
+            estimated_cost={
+                "compute_hours": 48.0,
+                "human_hours": 2.0},
             risk_level="high",
-            assumptions=["4x A100 GPUs available", "ImageNet-21k license obtained"],
+            assumptions=[
+                "4x A100 GPUs available",
+                "ImageNet-21k license obtained"],
         )
         data = step.model_dump()
         restored = PlanStep(**data)
@@ -42,7 +53,12 @@ class TestPlanStep:
         assert restored.estimated_cost["compute_hours"] == 48.0
 
     def test_json_roundtrip(self):
-        step = PlanStep(id="s1", label="Test", type="data", risk_level="low", status="done")
+        step = PlanStep(
+            id="s1",
+            label="Test",
+            type="data",
+            risk_level="low",
+            status="done")
         json_str = step.model_dump_json()
         restored = PlanStep.model_validate_json(json_str)
         assert restored.status == "done"
@@ -56,19 +72,27 @@ class TestResearchPlan:
         )
         assert plan.target_venue == ""
         assert plan.timeline_weeks == 0
-        assert plan.resource_summary == {"total_compute_hours": 0.0, "total_human_hours": 0.0}
+        assert plan.resource_summary == {
+            "total_compute_hours": 0.0,
+            "total_human_hours": 0.0}
 
     def test_full_plan_roundtrip(self):
         plan = ResearchPlan(
             id="plan_01",
             topic_spec_id="topic_abc",
-            primary_gap_ids=["gap_01", "gap_02"],
+            primary_gap_ids=[
+                "gap_01",
+                "gap_02"],
             hypothesis="M3 scales to large vision tasks",
-            steps=["step_01", "step_02"],
+            steps=[
+                "step_01",
+                "step_02"],
             expected_contribution="First large-scale Mamba evaluation",
             target_venue="NeurIPS",
             timeline_weeks=24,
-            resource_summary={"total_compute_hours": 500.0, "total_human_hours": 120.0},
+            resource_summary={
+                "total_compute_hours": 500.0,
+                "total_human_hours": 120.0},
         )
         data = plan.model_dump()
         restored = ResearchPlan(**data)
@@ -87,8 +111,16 @@ class TestCoverageReport:
         report = CoverageReport(
             id="cov_01",
             clusters=[
-                CoverageCluster(domain="vision", paper_ids=["p1", "p2"], claim_count=5),
-                CoverageCluster(domain="nlp", paper_ids=["p3"], claim_count=2),
+                CoverageCluster(
+                    domain="vision",
+                    paper_ids=[
+                        "p1",
+                        "p2"],
+                    claim_count=5),
+                CoverageCluster(
+                    domain="nlp",
+                    paper_ids=["p3"],
+                    claim_count=2),
             ],
             warnings=["No papers cover 'speech' domain"],
             timestamp="2024-01-01T00:00:00Z",
@@ -124,7 +156,7 @@ class TestReviewResult:
 
 class TestPaperClaimGap:
     """Ensure existing models still work after imports changed."""
-    
+
     def test_paper_metadata_fields(self):
         paper = Paper(
             id="p1", title="Test", authors=["A"], venue="arXiv",

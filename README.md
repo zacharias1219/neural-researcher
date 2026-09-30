@@ -55,20 +55,20 @@ neuralresearcher-evals --suite core --providers openai,anthropic
 NeuralResearcher includes a robust Model Context Protocol (MCP) server for integration with MCP clients (e.g., Claude Desktop).
 
 ### Available Features
-- **Tools**: `start_run` (initiate research), `resume_run` (restarts a failed/interrupted run from `INIT` and clears incompatible artifacts), `cancel_run`, `get_run_status`, `list_runs`, `get_run_result`.
+- **Tools**: `research_start`, `research_resume`, `research_cancel`, `research_status`, `research_list_runs`, `research_result`, `research_list_artifacts`.
 - **Resources**:
   - `research://runs/{run_id}/status`: Live JSON status of a run.
   - `research://runs/{run_id}/plan`: The final generated research plan (Markdown).
   - `research://runs/{run_id}/result`: The complete terminal result metadata.
   - `research://runs/{run_id}/artifacts/{artifact_name}`: Additional artifacts generated during a run.
-- **Prompts**: `explore_topic` (guided prompt to kick off a research task).
+- **Prompts**: `create_research_plan`, `review_research_plan`, `explore_research_gap`.
 
 ### Configuration & Limits
 - **Environment Variables**:
   - `GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` (provider selection).
   - `NEURALRESEARCHER_DATA_DIR`: Base directory for run state (default: `./research`).
   - `NEURALRESEARCHER_MCP_AUTH_TOKEN`: Bearer token for HTTP authentication.
-  - `NEURALRESEARCHER_MCP_CONCURRENCY`: Max concurrent background runs (default: 2).
+  - `NEURALRESEARCHER_MAX_CONCURRENT_RUNS`: Max concurrent background runs (default: 2).
   - `NEURALRESEARCHER_MCP_MAX_RESULT_BYTES`: Max bytes per artifact read (default: 10MB).
 - **Transports**:
   - **stdio**: Default mode. Best for local GUI clients.

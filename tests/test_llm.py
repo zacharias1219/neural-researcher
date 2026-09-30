@@ -27,7 +27,7 @@ def test_groq_rate_limit_retry(mock_get_client, mock_sleep):
     import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
-    
+
     request = httpx.Request("POST", "https://api.groq.com")
     response = httpx.Response(429, request=request)
     rate_limit_err = groq.RateLimitError(
@@ -58,7 +58,7 @@ def test_groq_max_retries_exceeded(mock_get_client, mock_sleep):
     import httpx
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
-    
+
     request = httpx.Request("POST", "https://api.groq.com")
     response = httpx.Response(429, request=request)
     rate_limit_err = groq.RateLimitError(
@@ -92,12 +92,20 @@ def test_openai_call(mock_get_client):
     mock_get_client.return_value = mock_client
 
     mock_client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(content="openai result", tool_calls=[]))],
-        usage=MagicMock(prompt_tokens=5, completion_tokens=15, total_tokens=20),
+        choices=[
+            MagicMock(
+                message=MagicMock(
+                    content="openai result",
+                    tool_calls=[]))],
+        usage=MagicMock(
+            prompt_tokens=5,
+            completion_tokens=15,
+            total_tokens=20),
     )
 
     config = Config(provider=LLMProvider.OPENAI, model_name="gpt-4o")
-    response = call_llm(config=config, messages=[{"role": "user", "content": "hello"}])
+    response = call_llm(config=config, messages=[
+                        {"role": "user", "content": "hello"}])
 
     assert response.content == "openai result"
     assert response.usage.total_tokens == 20
@@ -128,7 +136,9 @@ def test_anthropic_call(mock_get_client):
         usage=MagicMock(input_tokens=5, output_tokens=15),
     )
 
-    config = Config(provider=LLMProvider.ANTHROPIC, model_name="claude-sonnet-4-20250514")
+    config = Config(
+        provider=LLMProvider.ANTHROPIC,
+        model_name="claude-sonnet-4-20250514")
     response = call_llm(
         config=config,
         messages=[
@@ -164,7 +174,9 @@ def test_anthropic_tool_use(mock_get_client):
         usage=MagicMock(input_tokens=10, output_tokens=30),
     )
 
-    config = Config(provider=LLMProvider.ANTHROPIC, model_name="claude-sonnet-4-20250514")
+    config = Config(
+        provider=LLMProvider.ANTHROPIC,
+        model_name="claude-sonnet-4-20250514")
     response = call_llm(
         config=config,
         messages=[{"role": "user", "content": "search"}],
@@ -199,7 +211,9 @@ def test_anthropic_structured_output_json_schema(mock_get_client):
         usage=MagicMock(input_tokens=15, output_tokens=25),
     )
 
-    config = Config(provider=LLMProvider.ANTHROPIC, model_name="claude-sonnet-4-20250514")
+    config = Config(
+        provider=LLMProvider.ANTHROPIC,
+        model_name="claude-sonnet-4-20250514")
     response = call_llm(
         config=config,
         messages=[{"role": "user", "content": "analyze"}],
@@ -226,20 +240,22 @@ class DummyOutput(BaseModel):
     name: str
     age: int
 
+
 @patch("neuralresearcher.llm.call_llm")
 def test_generate_structured_success(mock_call_llm):
     from neuralresearcher.llm import generate_structured
-    
-    mock_call_llm.return_value = MagicMock(content='{"name": "Alice", "age": 30}')
+
+    mock_call_llm.return_value = MagicMock(
+        content='{"name": "Alice", "age": 30}')
     config = Config(provider=LLMProvider.OPENAI)
-    
+
     result = generate_structured(
         messages=[],
         output_model=DummyOutput,
         config=config,
         agent_name="test"
     )
-    
+
     assert result.name == "Alice"
     assert result.age == 30
     assert mock_call_llm.call_count == 1
@@ -248,22 +264,22 @@ def test_generate_structured_success(mock_call_llm):
 @patch("neuralresearcher.llm.call_llm")
 def test_generate_structured_malformed_then_success(mock_call_llm):
     from neuralresearcher.llm import generate_structured
-    
+
     mock_call_llm.side_effect = [
-        MagicMock(content='{"name": "Alice"}'), # Missing age
+        MagicMock(content='{"name": "Alice"}'),  # Missing age
         MagicMock(content='{"name": "Alice", "age": 30}')
     ]
-    
+
     config = Config(provider=LLMProvider.OPENAI, schema_repair_attempts=2)
     messages = [{"role": "user", "content": "Hello"}]
-    
+
     result = generate_structured(
         messages=messages,
         output_model=DummyOutput,
         config=config,
         agent_name="test"
     )
-    
+
     assert result.name == "Alice"
     assert result.age == 30
     assert mock_call_llm.call_count == 2
@@ -272,11 +288,12 @@ def test_generate_structured_malformed_then_success(mock_call_llm):
 @patch("neuralresearcher.llm.call_llm")
 def test_generate_structured_repair_exhaustion(mock_call_llm):
     from neuralresearcher.llm import generate_structured
-    
-    mock_call_llm.return_value = MagicMock(content='{"name": "Alice", "age": "thirty"}') # type error
-    
+
+    mock_call_llm.return_value = MagicMock(
+        content='{"name": "Alice", "age": "thirty"}')  # type error
+
     config = Config(provider=LLMProvider.OPENAI, schema_repair_attempts=2)
-    
+
     with pytest.raises(SchemaError, match="Exhausted 2 schema repair attempts"):
         generate_structured(
             messages=[],
@@ -284,7 +301,5 @@ def test_generate_structured_repair_exhaustion(mock_call_llm):
             config=config,
             agent_name="test"
         )
-        
-    assert mock_call_llm.call_count == 3 # 1 initial + 2 retries
 
-
+    assert mock_call_llm.call_count == 3  # 1 initial + 2 retries

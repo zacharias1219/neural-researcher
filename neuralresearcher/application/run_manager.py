@@ -86,69 +86,87 @@ class RunManager(ResearchService):
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
         
-        async with self._get_lock(run_id):
-            if run_id in self._active_runs:
-                raise ValueError("RUN_ALREADY_ACTIVE")
-            token = CancellationToken()
-            self._active_runs.add(run_id)
-            self._cancellation_tokens[run_id] = token
+        reserved = False
+        try:
+            async with self._get_lock(run_id):
+                if run_id in self._active_runs:
+                    raise ValueError("RUN_ALREADY_ACTIVE")
+                token = CancellationToken()
+                self._active_runs.add(run_id)
+                self._cancellation_tokens[run_id] = token
+                reserved = True
 
-        manifest = store.load_manifest()
-        now = datetime.datetime.now().isoformat()
-        manifest.update({
-            "run_id": run_id,
-            "topic": request.topic,
-            "provider": request.provider.value,
-            "model": request.model or "",
-            "strict": request.strict,
-            "created_at": now,
-            "cancellation_requested": False
-        })
-        store.save_manifest(manifest)
-        
-        # Submit to background
-        task = asyncio.create_task(self._execute_run(
-            run_id, 
-            request.topic, 
-            request.provider, 
-            request.model, 
-            request.strict,
-            request.seed,
-            request.max_papers,
-            request.time_window_start,
-            request.time_window_end
-        ))
-        self._tasks[run_id] = task
-        task.add_done_callback(lambda t: self._task_done_callback(run_id, t))
-        
-        return RunHandle(
-            run_id=run_id,
-            topic=request.topic,
-            status="INIT",
-            current_stage=None,
-            created_at=now,
-            status_resource_uri=f"research://runs/{run_id}/status",
-            result_resource_uri=f"research://runs/{run_id}/result",
-            plan_resource_uri=f"research://runs/{run_id}/plan"
-        )
+            manifest = store.load_manifest()
+            now = datetime.datetime.now().isoformat()
+            manifest.update({
+                "run_id": run_id,
+                "topic": request.topic,
+                "provider": request.provider.value,
+                "model": request.model or "",
+                "strict": request.strict,
+                "created_at": now,
+                "cancellation_requested": False
+            })
+            store.save_manifest(manifest)
+            
+            # Submit to background
+            task = asyncio.create_task(self._execute_run(
+                run_id, 
+                request.topic, 
+                request.provider, 
+                request.model, 
+                request.strict,
+                request.seed,
+                request.max_papers,
+                request.time_window_start,
+                request.time_window_end
+            ))
+            self._tasks[run_id] = task
+            task.add_done_callback(lambda t: self._task_done_callback(run_id, t))
+            
+            return RunHandle(
+                run_id=run_id,
+                topic=request.topic,
+                status="INIT",
+                current_stage=None,
+                created_at=now,
+                status_resource_uri=f"research://runs/{run_id}/status",
+                result_resource_uri=f"research://runs/{run_id}/result",
+                plan_resource_uri=f"research://runs/{run_id}/plan"
+            )
+        except Exception:
+            if reserved:
+                async with self._get_lock(run_id):
+                    self._active_runs.discard(run_id)
+                    self._cancellation_tokens.pop(run_id, None)
+                    self._tasks.pop(run_id, None)
+            raise
 
     async def resume_run(self, request: ResumeResearchRequest) -> RunHandle:
         self._validate_run_id(request.run_id)
-        async with self._get_lock(request.run_id):
-            if request.run_id in self._active_runs:
-                raise ValueError("RUN_ALREADY_ACTIVE")
-                
-            store = StateStore(directory=str(self.data_dir), run_id=request.run_id)
-            manifest = store.load_manifest()
-            if not manifest:
-                raise ValueError("UNKNOWN_RUN")
-                
-            if manifest.get("success"):
-                raise ValueError("RESUME_NOT_ALLOWED: Cannot resume a successful run")
+        store = StateStore(directory=str(self.data_dir), run_id=request.run_id)
+        manifest = store.load_manifest()
+        if not manifest:
+            raise ValueError("UNKNOWN_RUN")
+            
+        if manifest.get("success"):
+            raise ValueError("RESUME_NOT_ALLOWED: Cannot resume a successful run")
 
-            token = CancellationToken()
-            self._active_runs.add(request.run_id)
-            self._cancellation_tokens[request.run_id] = token
+        provider_val = request.provider.value if request.provider else manifest.get("provider", LLMProvider.GROQ.value)
+        model_val = request.model if request.model else manifest.get("model", "")
+        # Validate provider
+        provider_enum = LLMProvider(provider_val)
+
+        reserved = False
+        try:
+            async with self._get_lock(request.run_id):
+                if request.run_id in self._active_runs:
+                    raise ValueError("RUN_ALREADY_ACTIVE")
+
+                token = CancellationToken()
+                self._active_runs.add(request.run_id)
+                self._cancellation_tokens[request.run_id] = token
+                reserved = True
 
             # Reset terminal states
             manifest.pop("final_state", None)
@@ -168,14 +186,9 @@ class RunManager(ResearchService):
             if store.state_file.exists():
                 store.state_file.unlink()
             
-            provider_val = request.provider.value if request.provider else manifest.get("provider", LLMProvider.GROQ.value)
-            model_val = request.model if request.model else manifest.get("model", "")
-            
             manifest["provider"] = provider_val
             manifest["model"] = model_val
             store.save_manifest(manifest)
-            
-            provider_enum = LLMProvider(provider_val)
             
             task = asyncio.create_task(self._execute_run(
                 request.run_id, 
@@ -203,6 +216,13 @@ class RunManager(ResearchService):
                 result_resource_uri=f"research://runs/{request.run_id}/result",
                 plan_resource_uri=f"research://runs/{request.run_id}/plan"
             )
+        except Exception:
+            if reserved:
+                async with self._get_lock(request.run_id):
+                    self._active_runs.discard(request.run_id)
+                    self._cancellation_tokens.pop(request.run_id, None)
+                    self._tasks.pop(request.run_id, None)
+            raise
 
     async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool, seed: Optional[int], max_papers: Optional[int], time_window_start: Optional[int], time_window_end: Optional[int]):
         cancel_token = self._cancellation_tokens.get(run_id)
@@ -222,6 +242,8 @@ class RunManager(ResearchService):
                 
                 manifest = store.load_manifest()
                 manifest["started_at"] = datetime.datetime.now().isoformat()
+                manifest["provider"] = config.provider.value
+                manifest["model"] = config.model_name
                 if seed is not None: manifest["seed"] = seed
                 if max_papers is not None: manifest["max_papers"] = max_papers
                 if time_window_start is not None: manifest["time_window_start"] = time_window_start
@@ -337,7 +359,6 @@ class RunManager(ResearchService):
                 raise ValueError("UNKNOWN_RUN")
                 
             manifest = store.load_manifest()
-            manifest = store.load_manifest()
             already_terminal = "final_state" in manifest
             if not already_terminal:
                 manifest["cancellation_requested"] = True
@@ -444,7 +465,43 @@ class RunManager(ResearchService):
                 ))
         return artifacts
 
-    async def read_artifact(self, run_id: str, artifact_name: str) -> bytes:
+    async def read_public_resource(self, run_id: str, resource_name: str) -> bytes:
+        PUBLIC_FILES = {
+            "manifest.json", "research_plan.md", "papers.json", 
+            "claims.json", "gaps.json", "directions.json", 
+            "coverage.json", "review.json"
+        }
+        if resource_name not in PUBLIC_FILES:
+            raise ValueError("RESOURCE_NOT_FOUND")
+            
+        self._validate_run_id(run_id)
+        store = StateStore(directory=str(self.data_dir), run_id=run_id)
+        if not store.directory.exists():
+            raise ValueError("UNKNOWN_RUN")
+            
+        target_path = (store.directory / resource_name).resolve()
+        
+        try:
+            target_path.relative_to(store.directory.resolve())
+        except ValueError:
+            raise ValueError("INVALID_ARGUMENT")
+            
+        if not target_path.exists() or not target_path.is_file():
+            raise ValueError("RESOURCE_NOT_FOUND")
+            
+        if target_path.stat().st_size > self.max_result_bytes:
+            raise ValueError("ARTIFACT_TOO_LARGE")
+            
+        if resource_name == "manifest.json":
+            manifest = store.load_manifest()
+            if "artifact_paths" in manifest:
+                manifest["artifact_paths"] = {k: Path(v).name for k, v in manifest["artifact_paths"].items()}
+            import json
+            return json.dumps(manifest, indent=2).encode('utf-8')
+                
+        return target_path.read_bytes()
+
+    async def read_generated_artifact(self, run_id: str, artifact_name: str) -> bytes:
         self._validate_run_id(run_id)
         store = StateStore(directory=str(self.data_dir), run_id=run_id)
         if not store.directory.exists():
@@ -459,8 +516,8 @@ class RunManager(ResearchService):
                 target_path = Path(path_str).resolve()
                 break
                 
-        if not target_path or not target_path.exists():
-            target_path = (store.directory / artifact_name).resolve()
+        if not target_path:
+            raise ValueError("RESOURCE_NOT_FOUND")
             
         try:
             target_path.relative_to(store.directory.resolve())
@@ -474,3 +531,30 @@ class RunManager(ResearchService):
             raise ValueError("ARTIFACT_TOO_LARGE")
                 
         return target_path.read_bytes()
+
+    async def shutdown(self, grace_period: float = 5.0):
+        # 1. Signal cancellation tokens
+        for token in self._cancellation_tokens.values():
+            token.cancel()
+        
+        # 2. Wait for tasks to complete cooperatively
+        if self._tasks:
+            await asyncio.wait(self._tasks.values(), timeout=grace_period)
+            
+        # 3. Persist interrupted runs
+        for run_id in list(self._active_runs):
+            async with self._get_lock(run_id):
+                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                manifest = store.load_manifest()
+                if "final_state" not in manifest:
+                    manifest.update({
+                        "final_state": OrchestratorState.HALTED.name,
+                        "success": False,
+                        "halt_code": HaltCode.INTERRUPTED.value if hasattr(HaltCode, 'INTERRUPTED') else HaltCode.INTERNAL_ERROR.value,
+                        "failed_stage": manifest.get("current_stage", "UNKNOWN"),
+                        "error_message": "Run interrupted by server shutdown.",
+                        "finished_at": datetime.datetime.now().isoformat()
+                    })
+                    store.save_manifest(manifest)
+                self._active_runs.discard(run_id)
+                self._cancellation_tokens.pop(run_id, None)

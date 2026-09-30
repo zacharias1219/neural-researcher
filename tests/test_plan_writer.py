@@ -33,7 +33,7 @@ def fixture_data(tmp_path):
             metrics=["accuracy", "FLOPs"],
         ),
     ]
-    
+
     claims = [
         Claim(id="c1", paper_id="p1", type="result",
               text="Mamba achieves 3x throughput vs Transformer",
@@ -43,7 +43,7 @@ def fixture_data(tmp_path):
               text="Only evaluated on NLP tasks",
               section="abstract", evidence_ref="http://test"),
     ]
-    
+
     gaps = [
         Gap(id="gap_01", description="Mamba not evaluated on large-scale vision",
             gap_type="unexplored_axis", novelty_estimate="high",
@@ -52,7 +52,7 @@ def fixture_data(tmp_path):
         Gap(id="gap_02", description="No speech benchmarks for Mamba",
             gap_type="limitation", novelty_estimate="medium"),
     ]
-    
+
     directions = [
         Direction(id="dir_01", primary_gap_id="gap_01",
                   hypothesis="Mamba scales to large vision tasks",
@@ -60,7 +60,7 @@ def fixture_data(tmp_path):
                   expected_contribution_type="empirical evaluation",
                   novelty_assessment="high"),
     ]
-    
+
     steps = [
         PlanStep(id="step_01", plan_id="plan_01", label="Preprocess ImageNet-21k",
                  description="Download and preprocess ImageNet-21k into 224x224 patches",
@@ -100,18 +100,22 @@ def fixture_data(tmp_path):
                  dependencies=["step_05"],
                  estimated_cost={"compute_hours": 0.0, "human_hours": 16.0}),
     ]
-    
+
     plan = ResearchPlan(
-        id="plan_01", topic_spec_id="topic_01",
+        id="plan_01",
+        topic_spec_id="topic_01",
         primary_gap_ids=["gap_01"],
         hypothesis="Mamba-based M3 achieves competitive accuracy on large-scale vision",
         expected_contribution="First large-scale Mamba evaluation across vision benchmarks",
         target_venue="NeurIPS",
         timeline_weeks=24,
-        resource_summary={"total_compute_hours": 153.0, "total_human_hours": 56.0},
-        steps=[s.id for s in steps],
+        resource_summary={
+            "total_compute_hours": 153.0,
+            "total_human_hours": 56.0},
+        steps=[
+            s.id for s in steps],
     )
-    
+
     coverage_report = CoverageReport(
         id="cov_01",
         clusters=[
@@ -121,15 +125,15 @@ def fixture_data(tmp_path):
         warnings=["No papers cover the 'speech' domain — literature coverage may be incomplete."],
         timestamp="2024-01-01T00:00:00Z",
     )
-    
+
     review_result = ReviewResult(
         id="rev_01", passed=True,
         issues=[], suggestions=["Add more baselines"],
         timestamp="2024-01-01T00:00:00Z",
     )
-    
+
     output_path = str(tmp_path / "research_plan.md")
-    
+
     return {
         "plan": plan, "steps": steps, "papers": papers,
         "gaps": gaps, "directions": directions, "claims": claims,

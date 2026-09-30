@@ -3,56 +3,116 @@ from pathlib import Path
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.state import Paper, ReviewResult, CoverageReport
 
+
 def test_store_idempotent_save(tmp_path: Path):
     store = StateStore(directory=str(tmp_path))
-    
+
     # Save coverage
     cov = CoverageReport(id="1", clusters=[], warnings=["Test"])
     store.save_coverage_report(cov)
     loaded_cov = store.load_coverage_report()
+    assert loaded_cov is not None
     assert loaded_cov.warnings == ["Test"]
-    
+
     # Save review
     rev = ReviewResult(id="1", passed=True, suggestions=["test"])
     store.save_review_result(rev)
     loaded_rev = store.load_review_result()
+    assert loaded_rev is not None
     assert loaded_rev.passed is True
-    
+
     # Reload coverage to ensure it wasn't overwritten
     loaded_cov2 = store.load_coverage_report()
+    assert loaded_cov2 is not None
     assert loaded_cov2.warnings == ["Test"]
+
 
 def test_store_update_papers(tmp_path: Path):
     store = StateStore(directory=str(tmp_path))
-    
-    p1 = Paper(id="1", title="A", authors=[], venue="v", url="u", abstract="ab", year=2024)
-    p2 = Paper(id="2", title="B", authors=[], venue="v", url="u", abstract="ab", year=2024)
+
+    p1 = Paper(
+        id="1",
+        title="A",
+        authors=[],
+        venue="v",
+        url="u",
+        abstract="ab",
+        year=2024)
+    p2 = Paper(
+        id="2",
+        title="B",
+        authors=[],
+        venue="v",
+        url="u",
+        abstract="ab",
+        year=2024)
     store.save_papers([p1, p2])
-    
+
     # Update p1 with methods
-    p1_update = Paper(id="1", title="A", authors=[], venue="v", url="u", abstract="ab", year=2024, methods=["M1"])
+    p1_update = Paper(
+        id="1",
+        title="A",
+        authors=[],
+        venue="v",
+        url="u",
+        abstract="ab",
+        year=2024,
+        methods=["M1"])
     store.update_papers([p1_update])
-    
+
     loaded = store.load_papers()
     assert len(loaded) == 2
     p1_loaded = next(p for p in loaded if p.id == "1")
     assert p1_loaded.methods == ["M1"]
-    
+
     # Update p2 with datasets
-    p2_update = Paper(id="2", title="B", authors=[], venue="v", url="u", abstract="ab", year=2024, datasets=["D1"])
+    p2_update = Paper(
+        id="2",
+        title="B",
+        authors=[],
+        venue="v",
+        url="u",
+        abstract="ab",
+        year=2024,
+        datasets=["D1"])
     store.update_papers([p2_update])
-    
+
     loaded = store.load_papers()
     p1_loaded = next(p for p in loaded if p.id == "1")
     p2_loaded = next(p for p in loaded if p.id == "2")
-    assert p1_loaded.methods == ["M1"] # Should not be overwritten
+    assert p1_loaded.methods == ["M1"]  # Should not be overwritten
     assert p2_loaded.datasets == ["D1"]
+
 
 def test_store_save_papers_deduplication(tmp_path: Path):
     store = StateStore(directory=str(tmp_path))
-    p1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M1"])
-    p1_dup = Paper(id="p1", title="Title 1 Dup", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M2"], datasets=["D1"])
-    p2 = Paper(id="p2", title="Title 2", authors=[], venue="arXiv", url="http://2", abstract="abs", year=2024)
+    p1 = Paper(
+        id="p1",
+        title="Title 1",
+        authors=[],
+        venue="arXiv",
+        url="http://1",
+        abstract="abs",
+        year=2024,
+        methods=["M1"])
+    p1_dup = Paper(
+        id="p1",
+        title="Title 1 Dup",
+        authors=[],
+        venue="arXiv",
+        url="http://1",
+        abstract="abs",
+        year=2024,
+        methods=["M2"],
+        datasets=["D1"])
+    p2 = Paper(
+        id="p2",
+        title="Title 2",
+        authors=[],
+        venue="arXiv",
+        url="http://2",
+        abstract="abs",
+        year=2024)
 
     store.save_papers([p1, p1_dup, p2])
     loaded = store.load_papers()
@@ -62,17 +122,44 @@ def test_store_save_papers_deduplication(tmp_path: Path):
     assert "M2" in p1_loaded.methods
     assert p1_loaded.datasets == ["D1"]
 
+
 def test_store_update_papers_merging(tmp_path: Path):
     store = StateStore(directory=str(tmp_path))
-    p1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M1"])
+    p1 = Paper(
+        id="p1",
+        title="Title 1",
+        authors=[],
+        venue="arXiv",
+        url="http://1",
+        abstract="abs",
+        year=2024,
+        methods=["M1"])
     store.save_papers([p1])
 
     # First update
-    update1 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M2"], datasets=["D1"])
+    update1 = Paper(
+        id="p1",
+        title="Title 1",
+        authors=[],
+        venue="arXiv",
+        url="http://1",
+        abstract="abs",
+        year=2024,
+        methods=["M2"],
+        datasets=["D1"])
     store.update_papers([update1])
 
     # Second update
-    update2 = Paper(id="p1", title="Title 1", authors=[], venue="arXiv", url="http://1", abstract="abs", year=2024, methods=["M3"], metrics=["Acc"])
+    update2 = Paper(
+        id="p1",
+        title="Title 1",
+        authors=[],
+        venue="arXiv",
+        url="http://1",
+        abstract="abs",
+        year=2024,
+        methods=["M3"],
+        metrics=["Acc"])
     store.update_papers([update2])
 
     loaded = store.load_papers()
@@ -82,16 +169,31 @@ def test_store_update_papers_merging(tmp_path: Path):
     assert p1_loaded.metrics == ["Acc"]
 
 
-
 def test_store_dedupe_papers(tmp_path: Path):
     store = StateStore(directory=str(tmp_path))
-    p1 = Paper(id="p1", title="A", authors=[], venue="", year=2024, url="", abstract="")
-    p2 = Paper(id="p1", title="A", authors=[], venue="", year=2024, url="", abstract="", methods=["M1"])
+    p1 = Paper(
+        id="p1",
+        title="A",
+        authors=[],
+        venue="",
+        year=2024,
+        url="",
+        abstract="")
+    p2 = Paper(
+        id="p1",
+        title="A",
+        authors=[],
+        venue="",
+        year=2024,
+        url="",
+        abstract="",
+        methods=["M1"])
     store.save_papers([p1, p2])
     papers = store.load_papers()
     assert len(papers) == 1
     assert len(papers) == 1
     assert "M1" in papers[0].methods
+
 
 def test_store_corrupt_state(tmp_path: Path):
     from neuralresearcher.errors import StateCorruptionError
@@ -100,10 +202,10 @@ def test_store_corrupt_state(tmp_path: Path):
     store.directory.mkdir(parents=True, exist_ok=True)
     with open(store.state_file, "w", encoding="utf-8") as f:
         f.write("{corrupted_json")
-    
+
     with pytest.raises(StateCorruptionError):
         store.load_papers()
-        
+
     # Check that a backup was created
     backups = list(store.directory.glob("state.corrupt.*.json"))
     assert len(backups) == 1

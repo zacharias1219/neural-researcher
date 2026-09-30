@@ -27,13 +27,30 @@ def create_mcp_server(
 
     return server
 
-def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8000, path: str = "/mcp"):
+def start_mcp_server(
+    transport: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    path: str | None = None,
+):
     import os
     from neuralresearcher.logging import configure_console
-    if transport == "stdio":
+    
+    overrides = {
+        key: value
+        for key, value in {
+            "transport": transport,
+            "host": host,
+            "port": port,
+            "path": path,
+        }.items()
+        if value is not None
+    }
+    from typing import Any, cast
+    settings = MCPSettings(**cast(dict[str, Any], overrides))
+    
+    if settings.transport == "stdio":
         configure_console(stderr=True)
-        
-    settings = MCPSettings(transport=transport, host=host, port=port, path=path)
     
     # Configure logging
     log_level_name = settings.log_level.upper()
@@ -49,8 +66,15 @@ def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: in
     )
     server = create_mcp_server(service, settings)
 
+    import contextlib
+
     if settings.transport == "stdio":
-        asyncio.run(server.run_stdio_async())
+        async def run_stdio():
+            try:
+                await server.run_stdio_async()
+            finally:
+                await service.shutdown()
+        asyncio.run(run_stdio())
     elif settings.transport == "streamable-http":
         import uvicorn
         from starlette.applications import Starlette
@@ -60,7 +84,16 @@ def start_mcp_server(transport: str = "stdio", host: str = "127.0.0.1", port: in
         if settings.host != "127.0.0.1" and not settings.auth_token:
             raise RuntimeError("Authentication must be configured when binding to a non-loopback interface.")
             
-        app = server.streamable_http_app(settings.path)
+        app = server.streamable_http_app()
+        original_lifespan = app.router.lifespan_context
+        
+        @contextlib.asynccontextmanager
+        async def app_lifespan(app_instance):
+            async with original_lifespan(app_instance):
+                yield
+                await service.shutdown()
+
+        app.router.lifespan_context = app_lifespan
         
         if settings.auth_token:
             app.add_middleware(BearerAuthMiddleware, auth_token=settings.auth_token)
