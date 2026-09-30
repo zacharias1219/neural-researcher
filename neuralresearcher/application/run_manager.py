@@ -268,9 +268,13 @@ class RunManager(ResearchService):
                 loop = asyncio.get_running_loop()
                 def state_cb(state_name: str):
                     async def _update_state():
+                        if loop.is_closed() or self.shutting_down:
+                            return
                         async with self._get_lock(run_id):
                             m = store.load_manifest()
                             if m:
+                                if "final_state" in m:
+                                    return
                                 m["current_stage"] = state_name
                                 m["updated_at"] = datetime.datetime.now().isoformat()
                                 store.save_manifest(m)
@@ -301,6 +305,8 @@ class RunManager(ResearchService):
             async with self._get_lock(run_id):
                 store = StateStore(directory=str(self.data_dir), run_id=run_id)
                 manifest = store.load_manifest()
+                if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
+                    return
                 manifest.update({
                     "final_state": OrchestratorState.HALTED.name,
                     "success": False,
@@ -510,10 +516,19 @@ class RunManager(ResearchService):
             
         if resource_name == "manifest.json":
             manifest = store.load_manifest()
+            PUBLIC_MANIFEST_FIELDS = {
+                "run_id", "topic", "provider", "model", "strict",
+                "created_at", "started_at", "updated_at", "finished_at",
+                "current_stage", "final_state", "success", "halt_code",
+                "failed_stage", "error_message", "duration_seconds",
+                "cancellation_requested", "resumed_from", "seed",
+                "max_papers", "time_window_start", "time_window_end",
+            }
+            safe_manifest = {k: v for k, v in manifest.items() if k in PUBLIC_MANIFEST_FIELDS}
             if "artifact_paths" in manifest:
-                manifest["artifact_paths"] = {k: Path(v).name for k, v in manifest["artifact_paths"].items()}
+                safe_manifest["artifact_paths"] = {k: Path(v).name for k, v in manifest["artifact_paths"].items()}
             import json
-            return json.dumps(manifest, indent=2).encode('utf-8')
+            return json.dumps(safe_manifest, indent=2).encode('utf-8')
                 
         return target_path.read_bytes()
 
