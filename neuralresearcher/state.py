@@ -36,6 +36,7 @@ class HaltCode(str, Enum):
     REVIEW_FAILURE = "REVIEW_FAILURE"
     CANCELLED = "CANCELLED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    INTERRUPTED = "INTERRUPTED"
 
 class RunResult(BaseModel):
     run_id: str

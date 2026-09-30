@@ -163,13 +163,15 @@ async def test_duplicate_resume_is_rejected(manager, mocker):
         "neuralresearcher.orchestrator.Orchestrator.run",
         new=fake_run)
 
-    # First resume succeeds
+    # First resume succeeds and returns a new run_id
     req = ResumeResearchRequest(run_id=store.run_id)
-    await manager.resume_run(req)
+    handle1 = await manager.resume_run(req)
+    assert handle1.run_id != store.run_id
 
-    # Second should fail immediately
-    with pytest.raises(ValueError, match="RUN_ALREADY_ACTIVE"):
-        await manager.resume_run(req)
+    # Second resume on the original checkpoint creates another branch
+    handle2 = await manager.resume_run(req)
+    assert handle2.run_id != store.run_id
+    assert handle2.run_id != handle1.run_id
 
 
 @pytest.mark.asyncio
@@ -282,7 +284,7 @@ async def test_bootstrap_failure_is_persisted(manager, mocker):
     assert status.terminal is True
     assert status.success is False
     assert status.halt_code == "INTERNAL_ERROR"
-    assert "Configuration boom" in status.error_message
+    assert "The research run failed internally." in status.error_message
 
 
 @pytest.mark.asyncio

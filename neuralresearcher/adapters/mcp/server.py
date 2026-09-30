@@ -84,8 +84,8 @@ def start_mcp_server(
         if settings.host != "127.0.0.1" and not settings.auth_token:
             raise RuntimeError("Authentication must be configured when binding to a non-loopback interface.")
             
-        app = server.streamable_http_app()
-        original_lifespan = app.router.lifespan_context
+        mcp_app = server.streamable_http_app()
+        original_lifespan = mcp_app.router.lifespan_context
         
         @contextlib.asynccontextmanager
         async def app_lifespan(app_instance):
@@ -93,7 +93,16 @@ def start_mcp_server(
                 yield
                 await service.shutdown()
 
-        app.router.lifespan_context = app_lifespan
+        mount_path = settings.path
+        if not mount_path.startswith("/"):
+            mount_path = f"/{mount_path}"
+            
+        app = Starlette(
+            routes=[
+                Mount(mount_path, app=mcp_app),
+            ],
+            lifespan=app_lifespan,
+        )
         
         if settings.auth_token:
             app.add_middleware(BearerAuthMiddleware, auth_token=settings.auth_token)

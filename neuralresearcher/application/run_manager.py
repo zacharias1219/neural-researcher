@@ -38,6 +38,7 @@ class RunManager(ResearchService):
         self._cancellation_tokens: Dict[str, CancellationToken] = {}
         self._active_runs: set[str] = set()
         self._tasks: Dict[str, asyncio.Task] = {}
+        self.shutting_down = False
         
         # Reconciliation on startup
         self._reconcile_runs()
@@ -48,19 +49,24 @@ class RunManager(ResearchService):
             return
         
         for run_id in os.listdir(runs_dir):
-            store = StateStore(directory=str(self.data_dir), run_id=run_id)
-            manifest = store.load_manifest()
-            if not manifest:
-                continue
-                
-            state = manifest.get("final_state")
-            if not state:
-                # Active but not running -> interrupted
-                manifest["final_state"] = OrchestratorState.HALTED.name
-                manifest["halt_code"] = HaltCode.INTERNAL_ERROR.value
-                manifest["failed_stage"] = "UNKNOWN"
-                manifest["success"] = False
-                store.save_manifest(manifest)
+            try:
+                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                manifest = store.load_manifest()
+                if not manifest:
+                    continue
+                    
+                state = manifest.get("final_state")
+                if not state:
+                    # Active but not running -> interrupted
+                    manifest["final_state"] = OrchestratorState.HALTED.name
+                    manifest["halt_code"] = HaltCode.INTERRUPTED.value
+                    manifest["failed_stage"] = manifest.get("current_stage", "UNKNOWN")
+                    manifest["success"] = False
+                    manifest["error_message"] = "Run interrupted before server startup."
+                    manifest["finished_at"] = datetime.datetime.now().isoformat()
+                    store.save_manifest(manifest)
+            except Exception as e:
+                log_error(f"Failed to reconcile run {run_id}: {e}")
 
     def _get_lock(self, run_id: str) -> asyncio.Lock:
         if run_id not in self._run_locks:
@@ -82,6 +88,9 @@ class RunManager(ResearchService):
             self._tasks.pop(run_id, None)
 
     async def start_run(self, request: StartResearchRequest) -> RunHandle:
+        if self.shutting_down:
+            raise ValueError("SERVICE_SHUTTING_DOWN")
+            
         # We start by getting a new StateStore which generates a run_id
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
@@ -143,6 +152,9 @@ class RunManager(ResearchService):
             raise
 
     async def resume_run(self, request: ResumeResearchRequest) -> RunHandle:
+        if self.shutting_down:
+            raise ValueError("SERVICE_SHUTTING_DOWN")
+            
         self._validate_run_id(request.run_id)
         store = StateStore(directory=str(self.data_dir), run_id=request.run_id)
         manifest = store.load_manifest()
@@ -157,71 +169,69 @@ class RunManager(ResearchService):
         # Validate provider
         provider_enum = LLMProvider(provider_val)
 
+        new_store = StateStore(directory=str(self.data_dir))
+        new_run_id = new_store.run_id
+
         reserved = False
         try:
-            async with self._get_lock(request.run_id):
-                if request.run_id in self._active_runs:
+            async with self._get_lock(new_run_id):
+                if new_run_id in self._active_runs:
                     raise ValueError("RUN_ALREADY_ACTIVE")
 
                 token = CancellationToken()
-                self._active_runs.add(request.run_id)
-                self._cancellation_tokens[request.run_id] = token
+                self._active_runs.add(new_run_id)
+                self._cancellation_tokens[new_run_id] = token
                 reserved = True
 
-            # Reset terminal states
-            manifest.pop("final_state", None)
-            manifest.pop("success", None)
-            manifest.pop("halt_code", None)
-            manifest.pop("failed_stage", None)
-            manifest.pop("error_message", None)
-            manifest["cancellation_requested"] = False
+            now = datetime.datetime.now().isoformat()
+            new_manifest = {
+                "run_id": new_run_id,
+                "topic": manifest.get("topic", "Unknown"),
+                "provider": provider_val,
+                "model": model_val,
+                "strict": manifest.get("strict", False),
+                "created_at": now,
+                "status": "INIT",
+                "resumed_from": request.run_id,
+                "cancellation_requested": False
+            }
+            if "seed" in manifest: new_manifest["seed"] = manifest["seed"]
+            if "max_papers" in manifest: new_manifest["max_papers"] = manifest["max_papers"]
+            if "time_window_start" in manifest: new_manifest["time_window_start"] = manifest["time_window_start"]
+            if "time_window_end" in manifest: new_manifest["time_window_end"] = manifest["time_window_end"]
             
-            # Clear artifacts to restart from INIT
-            import shutil
-            for d in ["analysis", "transcripts", "papers", "sources"]:
-                target_dir = store.directory / d
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                    target_dir.mkdir(parents=True, exist_ok=True)
-            if store.state_file.exists():
-                store.state_file.unlink()
-            
-            manifest["provider"] = provider_val
-            manifest["model"] = model_val
-            store.save_manifest(manifest)
+            new_store.save_manifest(new_manifest)
             
             task = asyncio.create_task(self._execute_run(
-                request.run_id, 
-                manifest.get("topic", "Unknown"), 
+                new_run_id, 
+                new_manifest["topic"], 
                 provider_enum, 
                 model_val, 
-                manifest.get("strict", False),
-                manifest.get("seed"),
-                manifest.get("max_papers"),
-                manifest.get("time_window_start"),
-                manifest.get("time_window_end")
+                new_manifest["strict"],
+                new_manifest.get("seed"),
+                new_manifest.get("max_papers"),
+                new_manifest.get("time_window_start"),
+                new_manifest.get("time_window_end")
             ))
-            self._tasks[request.run_id] = task
-            task.add_done_callback(lambda t: self._task_done_callback(request.run_id, t))
-            
-            now = manifest.get("created_at", datetime.datetime.now().isoformat())
+            self._tasks[new_run_id] = task
+            task.add_done_callback(lambda t: self._task_done_callback(new_run_id, t))
             
             return RunHandle(
-                run_id=request.run_id,
-                topic=manifest.get("topic", ""),
+                run_id=new_run_id,
+                topic=new_manifest["topic"],
                 status="RESUMED",
                 current_stage=None,
                 created_at=now,
-                status_resource_uri=f"research://runs/{request.run_id}/status",
-                result_resource_uri=f"research://runs/{request.run_id}/result",
-                plan_resource_uri=f"research://runs/{request.run_id}/plan"
+                status_resource_uri=f"research://runs/{new_run_id}/status",
+                result_resource_uri=f"research://runs/{new_run_id}/result",
+                plan_resource_uri=f"research://runs/{new_run_id}/plan"
             )
         except Exception:
             if reserved:
-                async with self._get_lock(request.run_id):
-                    self._active_runs.discard(request.run_id)
-                    self._cancellation_tokens.pop(request.run_id, None)
-                    self._tasks.pop(request.run_id, None)
+                async with self._get_lock(new_run_id):
+                    self._active_runs.discard(new_run_id)
+                    self._cancellation_tokens.pop(new_run_id, None)
+                    self._tasks.pop(new_run_id, None)
             raise
 
     async def _execute_run(self, run_id: str, topic: str, provider: LLMProvider, model: Optional[str], strict: bool, seed: Optional[int], max_papers: Optional[int], time_window_start: Optional[int], time_window_end: Optional[int]):
@@ -272,6 +282,9 @@ class RunManager(ResearchService):
                 
                 async with self._get_lock(run_id):
                     manifest = store.load_manifest()
+                    if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
+                        return
+                        
                     manifest.update({
                         "final_state": result.final_state,
                         "success": result.success,
@@ -304,12 +317,15 @@ class RunManager(ResearchService):
                 async with self._get_lock(run_id):
                     store = StateStore(directory=str(self.data_dir), run_id=run_id)
                     manifest = store.load_manifest()
+                    if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
+                        return
+                        
                     manifest.update({
                         "final_state": OrchestratorState.HALTED.name,
                         "success": False,
                         "halt_code": HaltCode.INTERNAL_ERROR.value,
                         "failed_stage": manifest.get("current_stage", "BOOTSTRAP"),
-                        "error_message": f"Worker error: {type(e).__name__}: {str(e)}",
+                        "error_message": "The research run failed internally.",
                         "finished_at": datetime.datetime.now().isoformat()
                     })
                     store.save_manifest(manifest)
@@ -533,6 +549,8 @@ class RunManager(ResearchService):
         return target_path.read_bytes()
 
     async def shutdown(self, grace_period: float = 5.0):
+        self.shutting_down = True
+        
         # 1. Signal cancellation tokens
         for token in self._cancellation_tokens.values():
             token.cancel()
@@ -550,11 +568,9 @@ class RunManager(ResearchService):
                     manifest.update({
                         "final_state": OrchestratorState.HALTED.name,
                         "success": False,
-                        "halt_code": HaltCode.INTERRUPTED.value if hasattr(HaltCode, 'INTERRUPTED') else HaltCode.INTERNAL_ERROR.value,
+                        "halt_code": HaltCode.INTERRUPTED.value,
                         "failed_stage": manifest.get("current_stage", "UNKNOWN"),
                         "error_message": "Run interrupted by server shutdown.",
                         "finished_at": datetime.datetime.now().isoformat()
                     })
                     store.save_manifest(manifest)
-                self._active_runs.discard(run_id)
-                self._cancellation_tokens.pop(run_id, None)

@@ -138,9 +138,18 @@ def test_cli_resume_unknown_path(mock_rm_cls, tmp_path):
     assert "Cannot resume run" in result.stdout
 
 
-def test_security_api_keys_sanitized():
+@patch("neuralresearcher.cli.RunManager")
+def test_security_api_keys_sanitized(mock_rm_cls):
     import os
     os.environ["OPENAI_API_KEY"] = "sk-super-secret-key-123"
     os.environ["GROQ_API_KEY"] = "sk-super-secret-key-123"
+    
+    mock_rm = MagicMock()
+    mock_rm_cls.return_value = mock_rm
+    
+    async def mock_start(*args, **kwargs):
+        raise Exception("sk-super-secret-key-123")
+    mock_rm.start_run = mock_start
+
     result = runner.invoke(app, ["run", "test topic", "--no-interactive"])
     assert "sk-super-secret-key-123" not in result.stdout

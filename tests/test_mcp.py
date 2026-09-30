@@ -136,7 +136,15 @@ async def test_streamable_http_auth(tmp_path, monkeypatch):
         path="/mcp")
     service = RunManager(data_dir=settings.data_dir)
     server = create_mcp_server(service, settings)
-    app = server.streamable_http_app()
+    mcp_app = server.streamable_http_app()
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    app = Starlette(
+        routes=[
+            Mount("/mcp", app=mcp_app),
+        ]
+    )
 
     from neuralresearcher.adapters.mcp.security import BearerAuthMiddleware
     app.add_middleware(BearerAuthMiddleware, auth_token=settings.auth_token)
@@ -145,18 +153,20 @@ async def test_streamable_http_auth(tmp_path, monkeypatch):
 
     with TestClient(app) as client:
         # Missing token -> 401
-        res = client.get("/mcp")
+        res = client.get("/mcp/sse")
         assert res.status_code == 401
 
         # Invalid token -> 401
-        res = client.get("/mcp", headers={"Authorization": "Bearer bad"})
+        res = client.get("/mcp/sse", headers={"Authorization": "Bearer bad"})
         assert res.status_code == 401
 
         # Valid token -> reaches MCP
-        # (It will return 400 Bad Request or similar from MCP if GET is unsupported, but NOT 401)
-        res = client.post(
-            "/mcp",
+        res = client.get(
+            "/mcp/sse",
             headers={
-                "Authorization": "Bearer secret"},
-            json={})
+                "Authorization": "Bearer secret"})
         assert res.status_code != 401
+        
+        # Test root path doesn't expose MCP
+        res_root = client.get("/", headers={"Authorization": "Bearer secret"})
+        assert res_root.status_code == 404
