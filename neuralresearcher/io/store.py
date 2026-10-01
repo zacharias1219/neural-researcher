@@ -22,6 +22,7 @@ class StateStore:
         self.manifest_file = self.directory / "manifest.json"
         if create:
             self._ensure_directory()
+
     def _ensure_directory(self) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         (self.directory / "papers").mkdir(parents=True, exist_ok=True)
