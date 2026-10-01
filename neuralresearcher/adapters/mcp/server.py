@@ -1,7 +1,12 @@
 import asyncio
 import logging
 
-from mcp.server.mcpserver import MCPServer
+import sys
+
+try:
+    from mcp.server.mcpserver import MCPServer
+except ImportError:
+    MCPServer = None
 
 from neuralresearcher.adapters.mcp.config import MCPSettings
 from neuralresearcher.adapters.mcp.prompts import register_prompts
@@ -14,7 +19,10 @@ from neuralresearcher.application.run_manager import RunManager
 def create_mcp_server(
     service: RunManager,
     settings: MCPSettings,
-) -> MCPServer:
+) -> "MCPServer":
+    if MCPServer is None:
+        print("MCP dependencies are not installed. Please install with `pip install neuralresearcher[mcp]`")
+        sys.exit(1)
     server = MCPServer(
         name="neuralresearcher",
         version="0.1.0",
@@ -111,6 +119,10 @@ def start_mcp_server(
         raise ValueError(f"Unknown transport: {settings.transport}")
 
 def main():
+    if MCPServer is None:
+        print("MCP dependencies are not installed. Please install with `pip install neuralresearcher[mcp]`")
+        sys.exit(1)
+        
     import typer
     typer.run(start_mcp_server)
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neuralresearcher"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Terminal-based, PyPI-distributed multi-agent research planner for ML/CS topics."
 readme = "README.md"
 license = "MIT"
@@ -66,6 +66,9 @@ neuralresearcher-evals = "neuralresearcher.evals.runner:app"
 
 [tool.setuptools.packages.find]
 include = ["neuralresearcher*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "neuralresearcher.__version__"}
 
 [tool.ruff]
 target-version = "py310"

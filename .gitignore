@@ -225,3 +225,4 @@ venv-test/
 test_wheel_install.bat
 venv-verify/
 neuralresearcher-*/
+venv-sdist-verify/
