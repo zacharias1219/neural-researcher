@@ -1,5 +1,5 @@
-from neuralresearcher.state import ResearchPlan, PlanStep
 from neuralresearcher.plan_validation import validate_plan
+from neuralresearcher.state import PlanStep, ResearchPlan
 
 
 def test_validate_happy_path():

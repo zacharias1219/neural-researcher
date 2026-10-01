@@ -1,6 +1,7 @@
+from pathlib import Path
+
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.state import ResearchPlan
-from pathlib import Path
 
 
 def test_two_runs_different_ids(tmp_path: Path):

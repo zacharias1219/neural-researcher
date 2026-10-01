@@ -1,6 +1,7 @@
 import asyncio
 import time
 from enum import Enum, auto
+from typing import Any, Callable, Optional
 
 from neuralresearcher.agents.coverage import run_coverage
 from neuralresearcher.agents.directions import run_directions
@@ -13,7 +14,6 @@ from neuralresearcher.agents.reviewer import run_reviewer
 from neuralresearcher.agents.topic_scope import run_topic_scope
 from neuralresearcher.config import Config
 from neuralresearcher.context import AgentContext
-from typing import Optional, Callable, Any
 from neuralresearcher.errors import (
     LLMError,
     NeuralResearcherError,

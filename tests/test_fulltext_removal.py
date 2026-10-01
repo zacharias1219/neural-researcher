@@ -1,13 +1,12 @@
 from pathlib import Path
 
-from neuralresearcher.state import ContentLevel, Paper, Claim
 from neuralresearcher.agents.reading import run_reading
-from neuralresearcher.context import AgentContext
 from neuralresearcher.config import Config
-from neuralresearcher.io.store import StateStore
-from neuralresearcher.tools import TOOL_SCHEMAS, IMPLEMENTATIONS
+from neuralresearcher.context import AgentContext
 from neuralresearcher.io.plan_writer import render_markdown_plan
-from neuralresearcher.state import ResearchPlan
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.state import Claim, ContentLevel, Paper, ResearchPlan
+from neuralresearcher.tools import IMPLEMENTATIONS, TOOL_SCHEMAS
 
 
 def test_extract_sections_impl_absent_from_production():
@@ -58,7 +57,8 @@ def test_no_abstract_source_produces_page_level_provenance():
         abstract="abstract text",
         content_level=ContentLevel.ABSTRACT_ONLY)
     from unittest.mock import patch
-    from neuralresearcher.agents.reading import ReadingResponse, PaperMetadata, ReadingClaim
+
+    from neuralresearcher.agents.reading import PaperMetadata, ReadingClaim, ReadingResponse
 
     with patch("neuralresearcher.agents.reading.generate_structured") as mock_gen:
         mock_gen.return_value = ReadingResponse(

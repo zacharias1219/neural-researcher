@@ -1,5 +1,6 @@
 """Tests to verify package structure, imports, and wheel contents."""
 import importlib
+
 import pytest
 
 
@@ -65,9 +66,7 @@ def test_import_core_modules():
 
 def test_state_models_complete():
     from neuralresearcher.state import (
-        HaltCode, RunResult, TopicSpec, Paper, Claim, Gap,
-        Direction, PlanStep, ResearchPlan, CoverageReport, ReviewResult,
-        ContentLevel, TopicDomain,
+        HaltCode,
     )
     # Verify HaltCode has all required codes
     assert hasattr(HaltCode, "CANCELLED")
@@ -79,8 +78,7 @@ def test_state_models_complete():
 
 def test_application_models_complete():
     from neuralresearcher.application.models import (
-        StartResearchRequest, ResumeResearchRequest, RunHandle,
-        RunStatus, ResearchResult, RunSummary, ArtifactMetadata,
+        RunHandle,
     )
     # Verify all models can be instantiated with required fields
     handle = RunHandle(

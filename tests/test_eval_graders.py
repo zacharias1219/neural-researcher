@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
-from neuralresearcher.evals.graders import grade_completion, grade_correctness
+
 from neuralresearcher.evals.core import EvalTask
+from neuralresearcher.evals.graders import grade_completion, grade_correctness
 from neuralresearcher.orchestrator import OrchestratorState
 
 

@@ -3,16 +3,18 @@ MCP protocol tests using an in-memory client.
 These tests verify the MCP server surface without making external provider/network calls.
 """
 import json
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
+import pytest
 from mcp import Client
 
 from neuralresearcher.adapters.mcp.config import MCPSettings
 from neuralresearcher.adapters.mcp.server import create_mcp_server
-from neuralresearcher.application.run_manager import RunManager
 from neuralresearcher.application.models import (
-    RunHandle, RunStatus, ResearchResult, RunSummary, ArtifactMetadata,
+    ArtifactMetadata,
+    ResearchResult,
+    RunHandle,
+    RunStatus,
+    RunSummary,
 )
 
 

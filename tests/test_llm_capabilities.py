@@ -1,9 +1,10 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from neuralresearcher.llm import OpenAICompatibleAdapter, AnthropicAdapter, call_llm
+import pytest
+
 from neuralresearcher.config import Config, LLMProvider
 from neuralresearcher.errors import LLMError
+from neuralresearcher.llm import AnthropicAdapter, OpenAICompatibleAdapter, call_llm
 
 
 def test_capabilities_matrix():
@@ -77,8 +78,8 @@ def test_native_json_schema_fallback(mock_get_client):
 
 @patch("neuralresearcher.llm.OpenAICompatibleAdapter.get_client")
 def test_auth_errors_not_retried(mock_get_client):
-    import openai
     import httpx
+    import openai
     mock_client = MagicMock()
     mock_get_client.return_value = mock_client
 

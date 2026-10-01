@@ -1,11 +1,13 @@
-import pytest
 from unittest.mock import patch
-from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
-from neuralresearcher.context import AgentContext
+
+import pytest
+
 from neuralresearcher.config import Config
-from neuralresearcher.io.store import StateStore
-from neuralresearcher.state import TopicSpec, Paper, CoverageReport, CoverageCluster, ReviewResult, TopicDomain
+from neuralresearcher.context import AgentContext
 from neuralresearcher.errors import WorkflowError
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
+from neuralresearcher.state import CoverageCluster, CoverageReport, Paper, ReviewResult, TopicDomain, TopicSpec
 
 
 @patch("neuralresearcher.orchestrator.run_topic_scope")
@@ -85,7 +87,7 @@ def test_orchestrator_state_transitions(
             suggestions=[]))
 
     def fake_planner(ctx: AgentContext):
-        from neuralresearcher.state import ResearchPlan, PlanStep
+        from neuralresearcher.state import PlanStep, ResearchPlan
         plan = ResearchPlan(
             id="1",
             topic_spec_id="1",
@@ -135,7 +137,7 @@ def test_orchestrator_reviewer_retry_loop(tmp_path):
     def fake_planner(ctx: AgentContext):
         nonlocal feedback_seen
         feedback_seen.append(ctx.review_feedback)
-        from neuralresearcher.state import ResearchPlan, PlanStep
+        from neuralresearcher.state import PlanStep, ResearchPlan
         plan = ResearchPlan(
             id="1",
             topic_spec_id="1",
@@ -202,7 +204,7 @@ def test_orchestrator_reviewer_retry_exhausted_strict_mode(tmp_path):
                 suggestions=[]))
 
     def fake_planner(ctx: AgentContext):
-        from neuralresearcher.state import ResearchPlan, PlanStep
+        from neuralresearcher.state import PlanStep, ResearchPlan
         plan = ResearchPlan(
             id="1",
             topic_spec_id="1",

@@ -1,10 +1,10 @@
 import asyncio
-import pytest
-import datetime
 import os
-from pathlib import Path
+
+import pytest
+
+from neuralresearcher.application.models import ResumeResearchRequest, StartResearchRequest
 from neuralresearcher.application.run_manager import RunManager
-from neuralresearcher.application.models import StartResearchRequest, ResumeResearchRequest
 from neuralresearcher.config import LLMProvider
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.orchestrator import OrchestratorState
@@ -36,7 +36,7 @@ async def test_completed_run_reaches_terminal_state_without_deadlock(
     def fake_run(self):
         import time
         time.sleep(0.1)
-        from neuralresearcher.state import RunResult, HaltCode
+        from neuralresearcher.state import RunResult
         return RunResult(
             run_id=self.task_id,
             success=True,
@@ -248,7 +248,7 @@ async def test_active_run_cleanup_after_failure(manager, mocker):
 @pytest.mark.asyncio
 async def test_manifest_failure_message_reaches_status(manager, mocker):
     def fake_run(self):
-        from neuralresearcher.state import RunResult, HaltCode
+        from neuralresearcher.state import HaltCode, RunResult
         return RunResult(
             run_id=self.task_id,
             success=False,
@@ -319,9 +319,9 @@ async def test_mcp_max_result_bytes_is_enforced(manager):
 
 def test_time_window_filters_retrieved_papers(mocker):
     from neuralresearcher.agents.retrieval import run_retrieval
+    from neuralresearcher.config import load_config
     from neuralresearcher.context import AgentContext
     from neuralresearcher.state import TopicSpec
-    from neuralresearcher.config import load_config
 
     store = StateStore(directory="test_tmp")
     store.save_topic_spec(
@@ -415,7 +415,7 @@ def test_semantic_scholar_results_survive_source_merge(mocker):
 
 @pytest.mark.asyncio
 async def test_max_papers_injected_to_config(manager, mocker):
-    mock_run = mocker.patch("neuralresearcher.orchestrator.Orchestrator.run")
+    mocker.patch("neuralresearcher.orchestrator.Orchestrator.run")
     req = StartResearchRequest(
         topic="test",
         provider=LLMProvider.GROQ,
@@ -571,8 +571,8 @@ async def test_resolved_model_in_status(manager, mocker):
 @pytest.mark.asyncio
 async def test_shutdown_signals_tokens_and_waits(manager, mocker):
     def slow_run(self):
-        import time
         import asyncio
+        import time
         while not getattr(self.cancel_token, 'is_cancelled', False):
             time.sleep(0.1)
         raise asyncio.CancelledError()
@@ -597,8 +597,8 @@ async def test_shutdown_signals_tokens_and_waits(manager, mocker):
 @pytest.mark.asyncio
 async def test_late_cancelled_error_cannot_replace_interrupted(manager, mocker):
     def fake_run(self):
-        import time
         import asyncio
+        import time
         # Simulate a task that takes a long time
         for _ in range(50):
             if getattr(self.cancel_token, 'is_cancelled', False):
@@ -616,10 +616,10 @@ async def test_late_cancelled_error_cannot_replace_interrupted(manager, mocker):
 
     # shutdown with 0 grace period forces INTERRUPTED to be written immediately
     await manager.shutdown(grace_period=0.0)
-    
+
     # Let the worker raise CancelledError now
     await asyncio.sleep(1.0)
-    
+
     status = await manager.get_status(handle.run_id)
     assert status.terminal is True
     assert status.halt_code == "INTERRUPTED"
@@ -647,17 +647,17 @@ async def test_state_callbacks_cannot_mutate_terminal_run(manager, mocker):
 
     handle = await manager.start_run(StartResearchRequest(topic="test", provider=LLMProvider.GROQ))
     await asyncio.sleep(0.1)
-    
+
     # Force it to be terminal manually
     store = StateStore(directory=str(manager.data_dir), run_id=handle.run_id)
     manifest = store.load_manifest()
     manifest["final_state"] = "HALTED"
     manifest["halt_code"] = "INTERRUPTED"
     store.save_manifest(manifest)
-    
+
     # Wait for the run to finish
     await asyncio.sleep(0.5)
-    
+
     status = await manager.get_status(handle.run_id)
     # Since we set final_state manually, the callback SHOULD_BE_IGNORED should not have mutated current_stage
     assert status.current_stage != "SHOULD_BE_IGNORED"
@@ -692,9 +692,9 @@ async def test_resume_creates_distinct_run_with_resumed_from(manager, mocker):
 
     req = ResumeResearchRequest(run_id=store.run_id)
     handle = await manager.resume_run(req)
-    
+
     assert handle.run_id != store.run_id
-    
+
     await asyncio.sleep(0.1)
     new_store = StateStore(directory=str(manager.data_dir), run_id=handle.run_id)
     new_manifest = new_store.load_manifest()
@@ -718,7 +718,7 @@ async def test_public_manifest_exposes_only_allowlisted_fields(manager, mocker):
     import json
     public_data = await manager.read_public_resource(store.run_id, "manifest.json")
     public_manifest = json.loads(public_data.decode('utf-8'))
-    
+
     assert "secret_api_key" not in public_manifest
     assert "internal_path" not in public_manifest
     assert public_manifest["run_id"] == store.run_id
@@ -770,7 +770,7 @@ async def test_invalid_or_empty_manifests_are_not_valid_runs(manager):
     run_dir.mkdir(parents=True)
     # create empty valid JSON manifest
     (run_dir / "manifest.json").write_text("{}")
-    
+
     with pytest.raises(ValueError, match="UNKNOWN_RUN"):
         await manager.get_status(run_id)
 
@@ -786,19 +786,19 @@ async def test_repeated_unknown_lookups_do_not_grow_run_locks(manager):
 
 @pytest.mark.asyncio
 async def test_worker_cleanup_does_not_delete_lock(manager, mocker):
+    import asyncio
+
     from neuralresearcher.application.models import StartResearchRequest
     from neuralresearcher.config import LLMProvider
-    import asyncio
-    
+
     req = StartResearchRequest(topic="test-lock", provider=LLMProvider.GROQ)
-    
+
     def fake_run(*args, **kwargs):
         from neuralresearcher.state import RunResult
-        from neuralresearcher.orchestrator import OrchestratorState
         return RunResult(final_state=OrchestratorState.COMPLETED.name, success=True, failed_stage=None, message=None, duration_seconds=0.0, artifact_paths={})
-        
+
     mocker.patch("neuralresearcher.orchestrator.Orchestrator.run", side_effect=fake_run)
-    
+
     handle = await manager.start_run(req)
     await asyncio.sleep(0.1) # wait for worker to finish
     assert handle.run_id in manager._run_locks
@@ -811,7 +811,7 @@ async def test_manifest_corruption_raises_state_corruption_error(manager):
     run_dir.mkdir(parents=True)
     # create corrupt JSON
     (run_dir / "manifest.json").write_text("{bad-json}")
-    
+
     with pytest.raises(StateCorruptionError):
         await manager.get_status(run_id)
 
@@ -821,35 +821,35 @@ async def test_list_runs_does_not_modify_directories(manager):
     run_id = "test-list-run"
     run_dir = manager.data_dir / "runs" / run_id
     run_dir.mkdir(parents=True)
-    
+
     await manager.list_runs()
-    
+
     # Check that store initialization in list_runs didn't create 'papers', 'transcripts' etc
     assert not (run_dir / "papers").exists()
 
 @pytest.mark.asyncio
 async def test_corrupt_run_does_not_prevent_listing_others(manager, mocker):
+    import asyncio
+
     from neuralresearcher.application.models import StartResearchRequest
     from neuralresearcher.config import LLMProvider
-    import asyncio
-    
+
     req = StartResearchRequest(topic="good-run", provider=LLMProvider.GROQ)
-    
+
     def fake_run(*args, **kwargs):
         from neuralresearcher.state import RunResult
-        from neuralresearcher.orchestrator import OrchestratorState
         return RunResult(final_state=OrchestratorState.COMPLETED.name, success=True, failed_stage=None, message=None, duration_seconds=0.0, artifact_paths={})
-        
+
     mocker.patch("neuralresearcher.orchestrator.Orchestrator.run", side_effect=fake_run)
-    
+
     await manager.start_run(req)
     await asyncio.sleep(0.05)
-    
+
     run_id = "corrupt-run"
     run_dir = manager.data_dir / "runs" / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "manifest.json").write_text("{bad-json}")
-    
+
     runs = await manager.list_runs()
     assert len(runs) >= 2
     assert any(r.topic == "good-run" for r in runs)
@@ -857,15 +857,14 @@ async def test_corrupt_run_does_not_prevent_listing_others(manager, mocker):
 
 @pytest.mark.asyncio
 async def test_concurrent_updates_preserve_cancellation(manager, mocker):
+    import asyncio
+    import time
+
     from neuralresearcher.application.models import StartResearchRequest
     from neuralresearcher.config import LLMProvider
-    import asyncio
-    
-    import time
-    
+
     def fake_run(*args, **kwargs):
-        from neuralresearcher.state import RunResult, HaltCode
-        from neuralresearcher.orchestrator import OrchestratorState
+        from neuralresearcher.state import HaltCode, RunResult
         time.sleep(0.15)
         return RunResult(
             final_state=OrchestratorState.HALTED.name,
@@ -880,18 +879,18 @@ async def test_concurrent_updates_preserve_cancellation(manager, mocker):
     mocker.patch("neuralresearcher.orchestrator.Orchestrator.run", side_effect=fake_run)
     req = StartResearchRequest(topic="cancel-race", provider=LLMProvider.GROQ)
     handle = await manager.start_run(req)
-    
+
     await asyncio.sleep(0.05) # let worker start and save its started_at manifest
-    
+
     # Cancel it
     await manager.cancel_run(handle.run_id)
-    
+
     status_before = await manager.get_status(handle.run_id)
     assert status_before.cancellation_requested is True
-    
+
     # Let worker finish and save final state
     await asyncio.sleep(0.2)
-    
+
     status_after = await manager.get_status(handle.run_id)
     assert status_after.cancellation_requested is True
 
@@ -899,29 +898,29 @@ async def test_concurrent_updates_preserve_cancellation(manager, mocker):
 async def test_cancel_run_releases_lock_before_status_lookup(manager, mocker):
     from neuralresearcher.application.models import StartResearchRequest
     from neuralresearcher.config import LLMProvider
-    
+
     req = StartResearchRequest(topic="cancel-lock-test", provider=LLMProvider.GROQ)
     def fake_run(*args, **kwargs):
-        from neuralresearcher.state import RunResult
-        from neuralresearcher.orchestrator import OrchestratorState
         import time
+
+        from neuralresearcher.state import RunResult
         time.sleep(0.5)
         return RunResult(final_state=OrchestratorState.COMPLETED.name, success=True, failed_stage=None, message=None, duration_seconds=0.0, artifact_paths={})
-    
+
     mocker.patch("neuralresearcher.orchestrator.Orchestrator.run", side_effect=fake_run)
     handle = await manager.start_run(req)
-    
+
     original_get_status = manager.get_status
     lock_held_during_status = None
-    
+
     async def hooked_get_status(run_id):
         nonlocal lock_held_during_status
         lock = manager._run_locks.get(run_id)
         lock_held_during_status = lock.locked() if lock else False
         return await original_get_status(run_id)
-        
+
     mocker.patch.object(manager, "get_status", side_effect=hooked_get_status)
-    
+
     await manager.cancel_run(handle.run_id)
     assert lock_held_during_status is False
 
@@ -931,12 +930,12 @@ async def test_open_existing_store_returns_unknown_only_for_missing_run(manager)
     # Missing -> ValueError("UNKNOWN_RUN")
     with pytest.raises(ValueError, match="UNKNOWN_RUN"):
         manager._open_existing_store("missing-run-id")
-        
+
     # Corrupted -> StateCorruptionError
     run_id = "corrupt-store-test"
     run_dir = manager.data_dir / "runs" / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "manifest.json").write_text("{bad}")
-    
+
     with pytest.raises(StateCorruptionError):
         manager._open_existing_store(run_id)

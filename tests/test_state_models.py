@@ -1,7 +1,13 @@
 """Tests for Pydantic model serialization/deserialization with new fields."""
 from neuralresearcher.state import (
-    PlanStep, ResearchPlan, CoverageCluster, CoverageReport,
-    ReviewResult, Paper, Claim, Gap
+    Claim,
+    CoverageCluster,
+    CoverageReport,
+    Gap,
+    Paper,
+    PlanStep,
+    ResearchPlan,
+    ReviewResult,
 )
 
 

@@ -1,12 +1,13 @@
-import pytest
 from unittest.mock import patch
 
-from neuralresearcher.state import Paper, Claim, TopicSpec, TopicDomain
-from neuralresearcher.context import AgentContext
-from neuralresearcher.io.store import StateStore
+import pytest
+
+from neuralresearcher.agents.coverage import CoverageClusterOutput, CoverageResponse, run_coverage
 from neuralresearcher.config import Config
-from neuralresearcher.errors import WorkflowError, SchemaError
-from neuralresearcher.agents.coverage import run_coverage, CoverageResponse, CoverageClusterOutput
+from neuralresearcher.context import AgentContext
+from neuralresearcher.errors import SchemaError, WorkflowError
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.state import Claim, Paper, TopicDomain, TopicSpec
 
 
 @pytest.fixture

@@ -1,17 +1,18 @@
-import os
 import json
-import pytest
+import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from neuralresearcher.tools import (
-    execute_tool_call,
-    search_papers_impl,
-    fetch_paper_impl,
-    ToolError,
-)
-from neuralresearcher.llm import ToolCall
+import pytest
+
 from neuralresearcher.config import Config
+from neuralresearcher.llm import ToolCall
+from neuralresearcher.tools import (
+    ToolError,
+    execute_tool_call,
+    fetch_paper_impl,
+    search_papers_impl,
+)
 
 
 @pytest.fixture

@@ -1,11 +1,11 @@
 """Tests for the new CLI commands: runs, status, artifacts, version, providers."""
 import os
-import json
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import MagicMock, patch
+
 from typer.testing import CliRunner
 
+from neuralresearcher.application.models import ArtifactMetadata, RunStatus, RunSummary
 from neuralresearcher.cli import app
-from neuralresearcher.application.models import RunSummary, RunStatus, ArtifactMetadata
 
 runner = CliRunner()
 

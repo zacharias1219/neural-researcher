@@ -1,12 +1,20 @@
 """Tests for the plan_writer rendering all 9 sections."""
-import pytest
 from pathlib import Path
 
-from neuralresearcher.state import (
-    ResearchPlan, PlanStep, Paper, Gap, Direction,
-    Claim, CoverageReport, CoverageCluster, ReviewResult,
-)
+import pytest
+
 from neuralresearcher.io.plan_writer import render_markdown_plan
+from neuralresearcher.state import (
+    Claim,
+    CoverageCluster,
+    CoverageReport,
+    Direction,
+    Gap,
+    Paper,
+    PlanStep,
+    ResearchPlan,
+    ReviewResult,
+)
 
 
 @pytest.fixture

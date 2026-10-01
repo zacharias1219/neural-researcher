@@ -1,8 +1,10 @@
-import pytest
 from pathlib import Path
-from neuralresearcher.io.store import StateStore
-from neuralresearcher.errors import StateCorruptionError
 from unittest.mock import patch
+
+import pytest
+
+from neuralresearcher.errors import StateCorruptionError
+from neuralresearcher.io.store import StateStore
 
 
 def test_store_serialization_failure_preserves_state(tmp_path: Path):

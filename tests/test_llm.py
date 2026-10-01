@@ -1,11 +1,12 @@
-import pytest
 import os
-from unittest.mock import patch, MagicMock
-from neuralresearcher.llm import call_llm, OpenAICompatibleAdapter, AnthropicAdapter
-from neuralresearcher.config import Config, LLMProvider
-from neuralresearcher.errors import LLMError, SchemaError
+from unittest.mock import MagicMock, patch
+
+import pytest
 from pydantic import BaseModel
 
+from neuralresearcher.config import Config, LLMProvider
+from neuralresearcher.errors import LLMError, SchemaError
+from neuralresearcher.llm import AnthropicAdapter, OpenAICompatibleAdapter, call_llm
 
 # ---------------------------------------------------------------------------
 # Groq provider tests
