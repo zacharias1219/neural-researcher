@@ -1,6 +1,5 @@
 import asyncio
 import logging
-
 import sys
 
 try:
@@ -122,7 +121,7 @@ def main():
     if MCPServer is None:
         print("MCP dependencies are not installed. Please install with `pip install neuralresearcher[mcp]`")
         sys.exit(1)
-        
+
     import typer
     typer.run(start_mcp_server)
 
