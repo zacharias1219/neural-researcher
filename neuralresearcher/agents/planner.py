@@ -2,14 +2,16 @@ import hashlib
 import json
 import re
 import uuid
+from typing import Dict, List, Literal
+
+from pydantic import BaseModel, Field
 
 from neuralresearcher.context import AgentContext
-from neuralresearcher.state import ResearchPlan, PlanStep
-from neuralresearcher.llm import generate_structured
 from neuralresearcher.errors import SchemaError
+from neuralresearcher.llm import generate_structured
 from neuralresearcher.plan_validation import normalize_plan
-from pydantic import BaseModel, Field
-from typing import List, Literal, Dict
+from neuralresearcher.state import PlanStep, ResearchPlan
+
 
 class PlanOutput(BaseModel):
     hypothesis: str
@@ -39,17 +41,17 @@ def run_planner(context: AgentContext) -> None:
     directions = context.store.load_directions()
     if not directions:
         return
-        
+
     direction = directions[0]  # Pick the top-ranked direction
-    
+
     # Gather rich context from the store
     papers = context.store.load_papers()
     abstract_only = all(p.content_level != "FULL_TEXT" for p in papers) if papers else True
-    
+
     claims = context.store.load_claims()
     gaps = context.store.load_gaps()
     coverage_report = context.store.load_coverage_report()
-    
+
     # Build context blocks for the prompt
     papers_block = "\n".join([
         f"- {p.title} (ID: {p.id}, Year: {p.year}) | "
@@ -58,19 +60,19 @@ def run_planner(context: AgentContext) -> None:
         f"Metrics: {', '.join(p.metrics) if p.metrics else 'N/A'}"
         for p in papers
     ])
-    
+
     gaps_block = "\n".join([
         f"- Gap ID: {g.id} | {g.description} | Type: {g.gap_type} | "
         f"Dimensions: {json.dumps(g.dimensions)} | Novelty: {g.novelty_estimate}"
         for g in gaps
     ])
-    
+
     coverage_warnings = ""
     if coverage_report and coverage_report.warnings:
         coverage_warnings = "\nCoverage Warnings:\n" + "\n".join(
             f"- {w}" for w in coverage_report.warnings
         )
-    
+
     claims_block = "\n".join([
         f"- [{c.type}] {c.text} (from {c.paper_id})"
         for c in claims[:15]  # limit for context window
@@ -100,9 +102,9 @@ def run_planner(context: AgentContext) -> None:
         "- Generate at least 12 steps for a thorough plan\n"
         "If the analysis is based only on paper abstracts (ABSTRACT_ONLY), add an explicit warning to the plan description or hypothesis."
     )
-    
+
     context_note = "NOTE: Analysis is based on FULL_TEXT." if not abstract_only else "NOTE: Analysis is ABSTRACT_ONLY. Warn the user."
-    
+
     user_prompt = (
         f"Create an executable research plan for this direction:\n\n"
         f"Hypothesis: {direction.hypothesis}\n"
@@ -115,12 +117,12 @@ def run_planner(context: AgentContext) -> None:
         f"{feedback_block}\n\n"
         f"Context Info: {context_note}"
     )
-    
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    
+
     data = generate_structured(
         messages=messages,
         output_model=PlannerResponse,
@@ -129,18 +131,18 @@ def run_planner(context: AgentContext) -> None:
         store=context.store,
         task_id=context.task_id
     )
-    
+
     try:
         p_data = data.plan
-        
+
         if context.config.seed is not None:
             plan_id = f"plan_{hashlib.sha1(f'{context.topic}_{context.config.seed}_plan'.encode()).hexdigest()[:8]}"
         else:
             plan_id = f"plan_{uuid.uuid4().hex[:8]}"
-        
+
         topic_spec = context.store.load_topic_spec()
         topic_spec_id = topic_spec.id if topic_spec else ""
-        
+
         # Build the plan with all fields
         plan = ResearchPlan(
             id=plan_id,
@@ -151,17 +153,17 @@ def run_planner(context: AgentContext) -> None:
             target_venue=p_data.target_venue,
             timeline_weeks=p_data.timeline_weeks,
         )
-        
+
         # Parse steps with full metadata
         s_data = data.steps
         if not s_data:
             raise SchemaError("Planner response contained no steps.")
-            
+
         parsed_steps = []
         for i, s_obj in enumerate(s_data):
             s = s_obj.model_dump()
             step_id = f"step_{(i + 1):02d}"
-            
+
             # Sanitize dependencies (e.g., if LLM writes "step_01_collect_data", extract "step_01")
             raw_deps = s.get('dependencies', [])
             clean_deps = []
@@ -171,7 +173,7 @@ def run_planner(context: AgentContext) -> None:
                     clean_deps.append(match.group(1))
                 else:
                     clean_deps.append(d)
-                    
+
             step = PlanStep(
                 id=step_id,
                 plan_id=plan_id,
@@ -188,14 +190,14 @@ def run_planner(context: AgentContext) -> None:
                 metrics=s.get('metrics', []),
             )
             parsed_steps.append(step)
-            
+
         # Deterministic Normalization Pass
         plan, parsed_steps = normalize_plan(plan, parsed_steps)
-        
+
         # Store step IDs in plan
         plan.steps = [s.id for s in parsed_steps]
-            
+
         context.store.save_plan(plan, parsed_steps)
-        
+
     except Exception as e:
         raise SchemaError(f"Failed to parse plan: {e}")

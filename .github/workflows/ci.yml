@@ -21,7 +21,7 @@ jobs:
         pip install -e .[dev,mcp]
     - name: Run linting
       run: |
-        flake8 neuralresearcher tests
+        python -m ruff check neuralresearcher tests
         mypy neuralresearcher tests
     - name: Run tests
       run: |

@@ -1,6 +1,9 @@
-from typing import List, Literal, Optional, Tuple, Dict
+from typing import Dict, List, Literal, Optional, Tuple
+
 from pydantic import BaseModel
-from neuralresearcher.state import ResearchPlan, PlanStep
+
+from neuralresearcher.state import PlanStep, ResearchPlan
+
 
 class ValidationIssue(BaseModel):
     code: str
@@ -14,30 +17,30 @@ def normalize_plan(plan: ResearchPlan, steps: List[PlanStep]) -> Tuple[ResearchP
     # Deduplicate IDs, set missing statuses, fix formatting
     seen_ids = set()
     normalized_steps = []
-    
+
     for i, step in enumerate(steps):
         # Set missing default status
         if not step.status:
             step.status = "pending"
-            
+
         # Ensure ID exists, but do not deduplicate (let validator catch it)
         if not step.id:
             step.id = f"step_{i+1}"
-            
+
         seen_ids.add(step.id)
-        
+
         # Format dependencies
         step.dependencies = [dep.strip() for dep in step.dependencies if dep.strip()]
-        
+
         normalized_steps.append(step)
-    
+
     return plan, normalized_steps
 
 def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationIssue]:
     issues: List[ValidationIssue] = []
-    
+
     step_map = {step.id: step for step in steps}
-    
+
     # Check for duplicate step IDs
     if len(step_map) != len(steps):
         issues.append(ValidationIssue(
@@ -46,10 +49,10 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
             message="Duplicate step IDs found.",
             repairable=True
         ))
-        
+
     producers: Dict[str, str] = {}
     consumers: Dict[str, List[str]] = {}
-    
+
     for step in steps:
         for out in step.outputs:
             if out in producers:
@@ -61,7 +64,7 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
                     repairable=False
                 ))
             producers[out] = step.id
-            
+
         for inp in step.inputs:
             if inp not in consumers:
                 consumers[inp] = []
@@ -76,17 +79,17 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
             return True # Cycle
         if node in visited:
             return False
-        
+
         visited.add(node)
         path.add(node)
-        
+
         if node in step_map:
             for dep in step_map[node].dependencies:
                 if visit(dep):
                     return True
         path.remove(node)
         return False
-        
+
     for step in steps:
         if visit(step.id):
             has_cycle = True
@@ -110,7 +113,7 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
             res.update(compute_reachability(dep))
         reachability[node] = res
         return res
-        
+
     if not has_cycle:
         for step in steps:
             compute_reachability(step.id)
@@ -155,12 +158,12 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
                         step_id=step.id,
                         repairable=False
                     ))
-            
+
     # Substantive checks
     has_experiment = any(s.type == "experiment" for s in steps)
     has_analysis = any(s.type == "analysis" for s in steps)
     has_writing = any(s.type == "writing" for s in steps)
-    
+
     if not has_experiment:
         issues.append(ValidationIssue(
             code="MISSING_EXPERIMENT",
@@ -168,14 +171,14 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
             message="Plan lacks substantive experimental steps.",
             repairable=False
         ))
-        
+
     # Analysis consumes experiment results
     analysis_consumes_exp = False
     writing_consumes_analysis = False
-    
+
     exp_outputs = set(out for s in steps if s.type in ("experiment", "ablation") for out in s.outputs)
     analysis_outputs = set(out for s in steps if s.type == "analysis" for out in s.outputs)
-    
+
     for s in steps:
         if s.type == "analysis":
             if any(inp in exp_outputs for inp in s.inputs) or any(step_map[d].type in ("experiment", "ablation") for d in s.dependencies if d in step_map):
@@ -183,7 +186,7 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
         elif s.type == "writing":
             if any(inp in analysis_outputs for inp in s.inputs) or any(step_map[d].type == "analysis" for d in s.dependencies if d in step_map):
                 writing_consumes_analysis = True
-                
+
     if has_experiment and has_analysis and not analysis_consumes_exp:
         issues.append(ValidationIssue(
             code="DISCONNECTED_ANALYSIS",
@@ -191,7 +194,7 @@ def validate_plan(plan: ResearchPlan, steps: List[PlanStep]) -> List[ValidationI
             message="Analysis step does not consume experimental results.",
             repairable=False
         ))
-        
+
     if has_analysis and has_writing and not writing_consumes_analysis:
         issues.append(ValidationIssue(
             code="DISCONNECTED_WRITING",

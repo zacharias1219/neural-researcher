@@ -1,16 +1,17 @@
 import json
 import os
-from pathlib import Path
-from typing import Tuple, Dict, Any, List
 import urllib.parse
 import xml.etree.ElementTree as ET
-import requests
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
-from neuralresearcher.llm import ToolCall
-from neuralresearcher.errors import ToolError
-from neuralresearcher.config import Config
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+from neuralresearcher.config import Config
+from neuralresearcher.errors import ToolError
+from neuralresearcher.llm import ToolCall
 
 # Schemas
 SEARCH_PAPERS_SCHEMA = {
@@ -71,12 +72,12 @@ def _fetch_arxiv_xml(url: str, config: Config) -> bytes:
     )
     session.mount("http://", HTTPAdapter(max_retries=retries))
     session.mount("https://", HTTPAdapter(max_retries=retries))
-    
+
     try:
         response = session.get(url, timeout=config.tool_timeout_seconds)
     except Exception as e:
         raise ToolError(f"Network error fetching from arXiv API: {str(e)}")
-        
+
     if response.status_code != 200:
         raise ToolError(f"Failed to fetch from arXiv API: {response.status_code}")
 
@@ -96,15 +97,15 @@ def search_papers_impl(keywords: List[str], max_results: int = None, config: Con
     terms = [urllib.parse.quote(term.strip()) for term in keywords if term.strip()]
     if not terms:
         return []
-        
+
     formatted_query = "+AND+all:".join(terms)
     url = f"https://export.arxiv.org/api/query?search_query=all:{formatted_query}&start=0&max_results={max_results}"
     xml_content = _fetch_arxiv_xml(url, config)
-        
+
     root = ET.fromstring(xml_content)
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
     papers = []
-    
+
     for entry in root.findall('atom:entry', ns):
         paper_id = entry.find('atom:id', ns).text.split('/abs/')[-1]
         title = entry.find('atom:title', ns).text.replace('\n', ' ').strip()
@@ -113,7 +114,7 @@ def search_papers_impl(keywords: List[str], max_results: int = None, config: Con
         published = entry.find('atom:published', ns).text
         year = int(published[:4])
         url_link = entry.find('atom:id', ns).text
-        
+
         papers.append({
             "id": paper_id,
             "title": title,
@@ -123,7 +124,7 @@ def search_papers_impl(keywords: List[str], max_results: int = None, config: Con
             "abstract": summary,
             "source": "arxiv"
         })
-        
+
     offline = os.environ.get("NEURALRESEARCHER_OFFLINE") == "1"
     using_cassette = bool(os.environ.get("ARXIV_CASSETTE_PATH"))
     if not offline and not using_cassette:
@@ -155,7 +156,7 @@ def search_papers_impl(keywords: List[str], max_results: int = None, config: Con
         except Exception as e:
             from neuralresearcher.logging import log_warning
             log_warning(f"Semantic Scholar enrichment failed: {type(e).__name__}")
-        
+
     return papers[:max_results]
 
 
@@ -163,21 +164,21 @@ def fetch_paper_impl(paper_id: str, config: Config = None) -> Dict[str, Any]:
     """Fetch specific paper from arXiv by ID or replay cassette."""
     url = f"https://export.arxiv.org/api/query?id_list={paper_id}"
     xml_content = _fetch_arxiv_xml(url, config)
-        
+
     root = ET.fromstring(xml_content)
     ns = {'atom': 'http://www.w3.org/2005/Atom'}
     entry = root.find('atom:entry', ns)
-    
+
     if entry is None:
         raise ToolError(f"Paper {paper_id} not found.")
-        
+
     title = entry.find('atom:title', ns).text.replace('\n', ' ').strip()
     summary = entry.find('atom:summary', ns).text.replace('\n', ' ').strip()
     authors = [a.find('atom:name', ns).text for a in entry.findall('atom:author', ns)]
     published = entry.find('atom:published', ns).text
     year = int(published[:4])
     url_link = entry.find('atom:id', ns).text
-    
+
     return {
         "id": paper_id,
         "title": title,
@@ -198,12 +199,12 @@ def execute_tool_call(tool_call: ToolCall, config: Config) -> Tuple[Dict[str, An
     func_name = tool_call.function.get("name")
     if func_name not in IMPLEMENTATIONS:
         raise ToolError(f"Tool {func_name} is not implemented.")
-        
+
     try:
         args = json.loads(tool_call.function.get("arguments", "{}"))
     except json.JSONDecodeError:
         raise ToolError(f"Invalid JSON arguments for tool {func_name}.")
-        
+
     impl = IMPLEMENTATIONS[func_name]
     try:
         # Pass config to the implementation

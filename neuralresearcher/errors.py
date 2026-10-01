@@ -1,5 +1,7 @@
 from typing import Optional
+
 from neuralresearcher.state import HaltCode
+
 
 class NeuralResearcherError(Exception):
     """Base exception for all neuralresearcher errors."""

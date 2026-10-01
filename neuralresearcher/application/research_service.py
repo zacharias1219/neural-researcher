@@ -1,13 +1,15 @@
-from typing import Protocol, Optional
+from typing import Optional, Protocol
+
 from neuralresearcher.application.models import (
-    StartResearchRequest,
+    ArtifactMetadata,
+    ResearchResult,
     ResumeResearchRequest,
     RunHandle,
     RunStatus,
-    ResearchResult,
     RunSummary,
-    ArtifactMetadata,
+    StartResearchRequest,
 )
+
 
 class ResearchService(Protocol):
     async def start_run(self, request: StartResearchRequest) -> RunHandle:

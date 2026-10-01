@@ -1,10 +1,12 @@
 import hashlib
 import uuid
-from neuralresearcher.context import AgentContext
-from neuralresearcher.state import TopicSpec, TopicDomain
-from neuralresearcher.llm import generate_structured
+from typing import Dict, List
+
 from pydantic import BaseModel, Field
-from typing import List, Dict
+
+from neuralresearcher.context import AgentContext
+from neuralresearcher.llm import generate_structured
+from neuralresearcher.state import TopicDomain, TopicSpec
 
 
 class TopicSpecResponse(BaseModel):
@@ -23,18 +25,18 @@ def run_topic_scope(context: AgentContext) -> None:
     manifest = context.store.load_manifest()
     tw_start = manifest.get("time_window_start")
     tw_end = manifest.get("time_window_end")
-    
+
     system_prompt = "You are a specialized agent that takes a raw research topic and outputs a refined TopicSpec."
     if tw_start or tw_end:
         system_prompt += f"\nConstraint: The user requested literature bounded between years {tw_start or 'Any'} and {tw_end or 'Any'}. Ensure the output time_window strictly respects this boundary."
 
     user_prompt = f"Raw Topic: {context.topic}"
-    
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    
+
     data = generate_structured(
         messages=messages,
         output_model=TopicSpecResponse,
@@ -43,12 +45,12 @@ def run_topic_scope(context: AgentContext) -> None:
         store=context.store,
         task_id=context.task_id
     )
-    
+
     if context.config.seed is not None:
         tid = f"topic_{hashlib.sha1(f'{context.topic}_{context.config.seed}'.encode()).hexdigest()[:8]}"
     else:
         tid = f"topic_{uuid.uuid4().hex[:8]}"
-        
+
     topic_spec = TopicSpec(
         id=tid,
         raw_topic=context.topic,

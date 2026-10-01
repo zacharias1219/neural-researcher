@@ -1,10 +1,18 @@
 import logging
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
+from neuralresearcher.application.models import (
+    ArtifactMetadata,
+    ResearchResult,
+    ResumeResearchRequest,
+    RunHandle,
+    RunStatus,
+    RunSummary,
+    StartResearchRequest,
+)
 from neuralresearcher.application.research_service import ResearchService
-from neuralresearcher.application.models import StartResearchRequest, ResumeResearchRequest, RunHandle, RunStatus, ResearchResult, RunSummary, ArtifactMetadata
 from neuralresearcher.config import LLMProvider
 
 logger = logging.getLogger(__name__)
@@ -31,7 +39,7 @@ def register_tools(server, service: ResearchService):
             prov_enum = LLMProvider(provider)
         except ValueError:
             return ErrorResponse(error="INVALID_ARGUMENT", message=f"Unknown provider {provider}")
-            
+
         req = StartResearchRequest(
             topic=topic,
             provider=prov_enum,
@@ -47,7 +55,7 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             logger.error(f"Error starting research: {e}")
             return ErrorResponse(error="CAPACITY_EXCEEDED" if "capacity" in str(e).lower() else "INVALID_ARGUMENT", message=str(e))
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -64,7 +72,7 @@ def register_tools(server, service: ResearchService):
                 prov_enum = LLMProvider(provider)
             except ValueError:
                 return ErrorResponse(error="INVALID_ARGUMENT", message=f"Unknown provider {provider}")
-                
+
         req = ResumeResearchRequest(
             run_id=run_id,
             provider=prov_enum,
@@ -74,7 +82,7 @@ def register_tools(server, service: ResearchService):
             return await service.resume_run(req)
         except ValueError as e:
             return ErrorResponse(error=str(e).split(":")[0], message=str(e))
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -85,7 +93,7 @@ def register_tools(server, service: ResearchService):
             return await service.get_status(run_id)
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -96,7 +104,7 @@ def register_tools(server, service: ResearchService):
             return await service.cancel_run(run_id)
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -108,7 +116,7 @@ def register_tools(server, service: ResearchService):
         except ValueError as e:
             err = str(e)
             return ErrorResponse(error=err, message="Result unavailable" if err == "RUN_NOT_READY" else "Run not found")
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -124,7 +132,7 @@ def register_tools(server, service: ResearchService):
         try:
             limit = min(max(1, limit), 100)
             return await service.list_runs(status, provider, topic, created_after, limit)
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")
 
@@ -135,6 +143,6 @@ def register_tools(server, service: ResearchService):
             return await service.list_artifacts(run_id)
         except ValueError as e:
             return ErrorResponse(error=str(e), message="Run not found")
-        except Exception as e:
+        except Exception:
             logger.exception("Internal MCP operation failure")
             return ErrorResponse(error="INTERNAL_ERROR", message="The operation failed internally.")

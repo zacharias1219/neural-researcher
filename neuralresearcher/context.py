@@ -1,9 +1,19 @@
 from dataclasses import dataclass
-from typing import Optional, Protocol, List, Dict, Any
+from typing import Any, Dict, List, Optional, Protocol
+
 from neuralresearcher.config import Config
 from neuralresearcher.state import (
-    TopicSpec, Paper, Claim, Gap, Direction, ResearchPlan, PlanStep, CoverageReport, ReviewResult
+    Claim,
+    CoverageReport,
+    Direction,
+    Gap,
+    Paper,
+    PlanStep,
+    ResearchPlan,
+    ReviewResult,
+    TopicSpec,
 )
+
 
 class StoreProtocol(Protocol):
     def load_topic_spec(self) -> Optional[TopicSpec]: ...

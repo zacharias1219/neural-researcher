@@ -1,8 +1,9 @@
-from typing import Literal, Optional, List, Dict
-from pydantic import BaseModel, Field
 import datetime
-
 from enum import Enum
+from typing import Dict, List, Literal, Optional
+
+from pydantic import BaseModel, Field
+
 
 class ContentLevel(str, Enum):
     METADATA_ONLY = "METADATA_ONLY"
@@ -82,13 +83,16 @@ class Paper(BaseModel):
     citations: List[str] = Field(default_factory=list)
     section_refs: Dict[str, str] = Field(default_factory=dict)
 
+def _default_location() -> Dict[str, int | None]:
+    return {"page": None, "paragraph": None}
+
 class Claim(BaseModel):
     id: str
     paper_id: str
     type: Literal["result", "method", "assumption", "limitation", "future_work"]
     text: str
     section: str
-    location: Dict[str, int | None] = Field(default_factory=lambda: {"page": None, "paragraph": None})
+    location: Dict[str, int | None] = Field(default_factory=_default_location)
     datasets: List[str] = Field(default_factory=list)
     metrics: List[str] = Field(default_factory=list)
     evidence_ref: str

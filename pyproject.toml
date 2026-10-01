@@ -7,10 +7,22 @@ name = "neuralresearcher"
 version = "0.1.0"
 description = "Terminal-based, PyPI-distributed multi-agent research planner for ML/CS topics."
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "neuralresearcher Authors" }
 ]
 requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.0.0",
     "groq>=0.4.0",
@@ -28,14 +40,24 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-mock>=3.10.0",
-    "flake8>=6.0.0",
-    "mypy>=1.0.0"
+    "ruff>=0.4.0",
+    "mypy>=1.0.0",
+    "build>=1.0.0",
 ]
 mcp = [
     "mcp[cli]>=2,<3",
     "starlette>=0.30.0",
-    "uvicorn>=0.23.0"
+    "uvicorn>=0.23.0",
+    "httpx>=0.24.0",
 ]
+all = [
+    "neuralresearcher[dev,mcp]",
+]
+
+[project.urls]
+Homepage = "https://github.com/zacharias1219/neural-researcher"
+Repository = "https://github.com/zacharias1219/neural-researcher"
+Issues = "https://github.com/zacharias1219/neural-researcher/issues"
 
 [project.scripts]
 neuralresearcher = "neuralresearcher.cli:app"
@@ -44,3 +66,15 @@ neuralresearcher-evals = "neuralresearcher.evals.runner:app"
 
 [tool.setuptools.packages.find]
 include = ["neuralresearcher*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

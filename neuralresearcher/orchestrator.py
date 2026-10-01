@@ -1,28 +1,36 @@
 import asyncio
-from enum import Enum, auto
 import time
+from enum import Enum, auto
 
+from neuralresearcher.agents.coverage import run_coverage
+from neuralresearcher.agents.directions import run_directions
+from neuralresearcher.agents.gaps import run_gaps
+from neuralresearcher.agents.planner import run_planner
+from neuralresearcher.agents.reading import run_reading
+from neuralresearcher.agents.reporting import run_reporting
+from neuralresearcher.agents.retrieval import run_retrieval
+from neuralresearcher.agents.reviewer import run_reviewer
+from neuralresearcher.agents.topic_scope import run_topic_scope
 from neuralresearcher.config import Config
 from neuralresearcher.context import AgentContext
+from typing import Optional, Callable, Any
+from neuralresearcher.errors import (
+    LLMError,
+    NeuralResearcherError,
+    SchemaError,
+    StateCorruptionError,
+    ToolError,
+    WorkflowError,
+)
 from neuralresearcher.io.store import StateStore
 from neuralresearcher.logging import (
-    log_state_transition,
-    log_agent_start,
     log_agent_end,
+    log_agent_start,
     log_error,
+    log_state_transition,
     log_warning,
 )
-from neuralresearcher.errors import NeuralResearcherError, WorkflowError, SchemaError, LLMError, ToolError, StateCorruptionError
 from neuralresearcher.state import HaltCode, RunResult
-from neuralresearcher.agents.topic_scope import run_topic_scope
-from neuralresearcher.agents.retrieval import run_retrieval
-from neuralresearcher.agents.reading import run_reading
-from neuralresearcher.agents.coverage import run_coverage
-from neuralresearcher.agents.gaps import run_gaps
-from neuralresearcher.agents.directions import run_directions
-from neuralresearcher.agents.planner import run_planner
-from neuralresearcher.agents.reviewer import run_reviewer
-from neuralresearcher.agents.reporting import run_reporting
 
 
 class OrchestratorState(Enum):
@@ -46,8 +54,8 @@ class Orchestrator:
         self.store = store
         self.task_id = task_id
         self.state = OrchestratorState.INIT
-        self.cancel_token = None
-        self.on_state_change = None
+        self.cancel_token: Optional[Any] = None
+        self.on_state_change: Optional[Callable[[str], Any]] = None
 
         self.retry_count = 0
         self.context = AgentContext(
@@ -151,7 +159,7 @@ class Orchestrator:
             message = str(e)
 
         duration = time.time() - start_time
-        
+
         total_tokens = 0
         try:
             import json
@@ -163,7 +171,7 @@ class Orchestrator:
                             total_tokens += data.get("usage", {}).get("total_tokens", 0)
         except Exception:
             pass
-            
+
         return RunResult(
             run_id=self.task_id,
             final_state=self.state.name,
@@ -184,7 +192,7 @@ class Orchestrator:
         topic_spec = self.store.load_topic_spec()
         if not topic_spec:
             return
-            
+
         if topic_spec.domain.value == "other":
             raise WorkflowError("Topic is out-of-scope. Domain is not supported.", halt_code=HaltCode.OUT_OF_SCOPE)
 
@@ -193,20 +201,20 @@ class Orchestrator:
         papers = self.store.load_papers()
         if len(papers) < self.config.min_papers:
             raise WorkflowError(f"Found {len(papers)} papers, which is below the minimum threshold ({self.config.min_papers}). The topic might be too narrow.", halt_code=HaltCode.INSUFFICIENT_EVIDENCE)
-            
+
         topic_spec = self.store.load_topic_spec()
         if not topic_spec:
             return
-            
+
         keywords = [k.lower() for k in topic_spec.keywords]
-        
+
         # Simple overlap check: count papers that contain at least one keyword in title or abstract
         relevant_papers = 0
         for p in papers:
             text = f"{p.title} {p.abstract}".lower()
             if any(k in text for k in keywords):
                 relevant_papers += 1
-                
+
         ratio = relevant_papers / len(papers)
         if ratio < self.config.relevance_threshold:
             raise WorkflowError(f"Retrieval relevance too low ({ratio:.2f} < {self.config.relevance_threshold}). Retrieved papers do not match the topic keywords. Topic may be too specific or poorly phrased.", halt_code=HaltCode.LOW_RETRIEVAL_RELEVANCE)
@@ -216,10 +224,10 @@ class Orchestrator:
         report = self.store.load_coverage_report()
         if not report:
             return
-            
+
         num_clusters = len(report.clusters)
         num_warnings = len(report.warnings)
-        
+
         if num_clusters > 0:
             warning_ratio = num_warnings / num_clusters
             if warning_ratio > self.config.coverage_warning_threshold:

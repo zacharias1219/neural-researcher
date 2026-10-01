@@ -1,4 +1,5 @@
 import sys
+
 from rich.console import Console
 from rich.theme import Theme
 
@@ -16,8 +17,8 @@ custom_theme = Theme({
 _force_terminal = None
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore
     except Exception:
         _force_terminal = True  # fallback: let Rich handle it
 

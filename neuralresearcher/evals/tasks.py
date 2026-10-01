@@ -1,4 +1,4 @@
-from neuralresearcher.evals.core import EvalTask, EvalSuite
+from neuralresearcher.evals.core import EvalSuite, EvalTask
 
 CORE_TASKS = [
     EvalTask(

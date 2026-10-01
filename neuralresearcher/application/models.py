@@ -1,8 +1,10 @@
 import datetime
+from typing import Optional
+
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Dict
 
 from neuralresearcher.config import LLMProvider
+
 
 class StartResearchRequest(BaseModel):
     topic: str = Field(..., min_length=1, max_length=500)
@@ -21,7 +23,7 @@ class StartResearchRequest(BaseModel):
             raise ValueError(f"time_window_start cannot be > {max_year}")
         if self.time_window_end is not None and self.time_window_end > max_year:
             raise ValueError(f"time_window_end cannot be > {max_year}")
-            
+
         if self.time_window_start is not None and self.time_window_end is not None:
             if self.time_window_start > self.time_window_end:
                 raise ValueError("time_window_start cannot be greater than time_window_end")

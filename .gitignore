@@ -223,3 +223,5 @@ pytest_output.txt
 research/
 venv-test/
 test_wheel_install.bat
+venv-verify/
+neuralresearcher-*/

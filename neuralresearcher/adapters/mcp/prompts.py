@@ -1,5 +1,7 @@
-from mcp.types import PromptMessage, TextContent
 from typing import Optional
+
+from mcp.types import PromptMessage, TextContent
+
 
 def register_prompts(server):
 

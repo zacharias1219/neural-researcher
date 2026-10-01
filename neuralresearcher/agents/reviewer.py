@@ -1,12 +1,12 @@
 import hashlib
 import uuid
 from datetime import datetime, timezone
+from typing import List
 
 from neuralresearcher.context import AgentContext
-from neuralresearcher.state import ReviewResult
-from typing import List
 from neuralresearcher.logging import log_info
 from neuralresearcher.plan_validation import validate_plan
+from neuralresearcher.state import ReviewResult
 
 
 def run_reviewer(context: AgentContext) -> None:
@@ -14,27 +14,28 @@ def run_reviewer(context: AgentContext) -> None:
     if not plan:
         log_info("Reviewer: no plan found to review.")
         return
-    
+
     issues = []
     suggestions = []
-    
+
     validation_issues = validate_plan(plan, steps)
     for vi in validation_issues:
         if vi.severity == "error":
             issues.append(vi.message)
         else:
             suggestions.append(vi.message)
-            
+
     # Claim consistency review step
     claims = context.store.load_claims()
     if claims:
-        from neuralresearcher.llm import generate_structured
         from pydantic import BaseModel, Field
 
-        
+        from neuralresearcher.llm import generate_structured
+
+
         class ReviewVerificationResponse(BaseModel):
             issues: List[str] = Field(default_factory=list)
-            
+
         claims_text = "\n".join([f"- {c.id}: {c.text} (Source: {c.evidence_ref})" for c in claims[:10]]) # limit to 10 for review
         system_prompt = (
             "You are a consistency review agent. Perform a claim_consistency_review over these claims. "
@@ -55,7 +56,7 @@ def run_reviewer(context: AgentContext) -> None:
             issues.extend(data.issues)
         except Exception:
             pass
-            
+
     passed = len(issues) == 0
     if context.config.seed is not None:
         review_id = f"review_{hashlib.sha1(f'{context.topic}_{context.config.seed}_review'.encode()).hexdigest()[:8]}"
@@ -71,9 +72,9 @@ def run_reviewer(context: AgentContext) -> None:
         suggestions=suggestions,
         timestamp=timestamp
     )
-    
+
     context.store.save_review_result(result)
-    
+
     # Log summary
     if passed:
         log_info(f"Reviewer: plan PASSED with {len(suggestions)} suggestion(s).")

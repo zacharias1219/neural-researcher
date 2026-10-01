@@ -1,5 +1,5 @@
-import json
 from neuralresearcher.application.research_service import ResearchService
+
 
 def register_resources(server, service: ResearchService):
 

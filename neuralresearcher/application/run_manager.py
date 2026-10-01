@@ -1,30 +1,27 @@
 import asyncio
-import os
 import datetime
+import os
+import re
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict, Optional
 
-from pydantic import ValidationError
-
-from neuralresearcher.config import LLMProvider, load_config
-from neuralresearcher.io.store import StateStore
-from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
-from neuralresearcher.state import RunResult as CoreRunResult, HaltCode
-from neuralresearcher.errors import NeuralResearcherError, StateCorruptionError
-
+from neuralresearcher.application.cancellation import CancellationToken
 from neuralresearcher.application.models import (
-    StartResearchRequest,
+    ArtifactMetadata,
+    ResearchResult,
     ResumeResearchRequest,
     RunHandle,
     RunStatus,
-    ResearchResult,
     RunSummary,
-    ArtifactMetadata,
+    StartResearchRequest,
 )
 from neuralresearcher.application.research_service import ResearchService
-from neuralresearcher.application.cancellation import CancellationToken
-from neuralresearcher.logging import log_info, log_error, log_warning
-import re
+from neuralresearcher.config import LLMProvider, load_config
+from neuralresearcher.errors import StateCorruptionError
+from neuralresearcher.io.store import StateStore
+from neuralresearcher.logging import log_error
+from neuralresearcher.orchestrator import Orchestrator, OrchestratorState
+from neuralresearcher.state import HaltCode
 
 RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
@@ -39,7 +36,7 @@ class RunManager(ResearchService):
         self._active_runs: set[str] = set()
         self._tasks: Dict[str, asyncio.Task] = {}
         self.shutting_down = False
-        
+
         # Reconciliation on startup
         self._reconcile_runs()
 
@@ -47,7 +44,7 @@ class RunManager(ResearchService):
         runs_dir = self.data_dir / "runs"
         if not runs_dir.exists():
             return
-        
+
         for run_id in os.listdir(runs_dir):
             try:
                 store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
@@ -56,7 +53,7 @@ class RunManager(ResearchService):
                 manifest = store.load_manifest()
                 if not manifest:
                     continue
-                    
+
                 state = manifest.get("final_state")
                 if not state:
                     # Active but not running -> interrupted
@@ -80,6 +77,12 @@ class RunManager(ResearchService):
             raise ValueError("INVALID_RUN_ID")
 
     def _open_existing_store(self, run_id: str) -> StateStore:
+        """Open a store for an existing run without creating directories.
+
+        Raises:
+            ValueError("UNKNOWN_RUN") if the run directory or manifest does not exist.
+            StateCorruptionError if the manifest exists but is corrupt.
+        """
         self._validate_run_id(run_id)
         store = StateStore(
             directory=str(self.data_dir),
@@ -88,11 +91,12 @@ class RunManager(ResearchService):
         )
         if not store.directory.is_dir() or not store.manifest_file.is_file():
             raise ValueError("UNKNOWN_RUN")
-        
+
+        # Let StateCorruptionError propagate as-is (not misclassified as UNKNOWN_RUN)
         manifest = store.load_manifest()
         if not manifest:
             raise ValueError("UNKNOWN_RUN")
-            
+
         return store
 
     def _task_done_callback(self, run_id: str, task: asyncio.Task):
@@ -108,11 +112,11 @@ class RunManager(ResearchService):
     async def start_run(self, request: StartResearchRequest) -> RunHandle:
         if self.shutting_down:
             raise ValueError("SERVICE_SHUTTING_DOWN")
-            
+
         # We start by getting a new StateStore which generates a run_id
         store = StateStore(directory=str(self.data_dir))
         run_id = store.run_id
-        
+
         reserved = False
         try:
             async with self._get_lock(run_id):
@@ -135,13 +139,13 @@ class RunManager(ResearchService):
                 "cancellation_requested": False
             })
             store.save_manifest(manifest)
-            
+
             # Submit to background
             task = asyncio.create_task(self._execute_run(
-                run_id, 
-                request.topic, 
-                request.provider, 
-                request.model, 
+                run_id,
+                request.topic,
+                request.provider,
+                request.model,
                 request.strict,
                 request.seed,
                 request.max_papers,
@@ -150,7 +154,7 @@ class RunManager(ResearchService):
             ))
             self._tasks[run_id] = task
             task.add_done_callback(lambda t: self._task_done_callback(run_id, t))
-            
+
             return RunHandle(
                 run_id=run_id,
                 topic=request.topic,
@@ -172,12 +176,12 @@ class RunManager(ResearchService):
     async def resume_run(self, request: ResumeResearchRequest) -> RunHandle:
         if self.shutting_down:
             raise ValueError("SERVICE_SHUTTING_DOWN")
-            
+
         store = self._open_existing_store(request.run_id)
         manifest = store.load_manifest()
         if not manifest:
             raise ValueError("UNKNOWN_RUN")
-            
+
         if manifest.get("success"):
             raise ValueError("RESUME_NOT_ALLOWED: Cannot resume a successful run")
 
@@ -212,18 +216,22 @@ class RunManager(ResearchService):
                 "resumed_from": request.run_id,
                 "cancellation_requested": False
             }
-            if "seed" in manifest: new_manifest["seed"] = manifest["seed"]
-            if "max_papers" in manifest: new_manifest["max_papers"] = manifest["max_papers"]
-            if "time_window_start" in manifest: new_manifest["time_window_start"] = manifest["time_window_start"]
-            if "time_window_end" in manifest: new_manifest["time_window_end"] = manifest["time_window_end"]
-            
+            if "seed" in manifest:
+                new_manifest["seed"] = manifest["seed"]
+            if "max_papers" in manifest:
+                new_manifest["max_papers"] = manifest["max_papers"]
+            if "time_window_start" in manifest:
+                new_manifest["time_window_start"] = manifest["time_window_start"]
+            if "time_window_end" in manifest:
+                new_manifest["time_window_end"] = manifest["time_window_end"]
+
             new_store.save_manifest(new_manifest)
-            
+
             task = asyncio.create_task(self._execute_run(
-                new_run_id, 
-                new_manifest["topic"], 
-                provider_enum, 
-                model_val, 
+                new_run_id,
+                new_manifest["topic"],
+                provider_enum,
+                model_val,
                 new_manifest["strict"],
                 new_manifest.get("seed"),
                 new_manifest.get("max_papers"),
@@ -232,7 +240,7 @@ class RunManager(ResearchService):
             ))
             self._tasks[new_run_id] = task
             task.add_done_callback(lambda t: self._task_done_callback(new_run_id, t))
-            
+
             return RunHandle(
                 run_id=new_run_id,
                 topic=new_manifest["topic"],
@@ -266,16 +274,20 @@ class RunManager(ResearchService):
                     config.seed = seed
                 if max_papers is not None:
                     config.max_papers = max_papers
-                
+
                 async with self._get_lock(run_id):
                     manifest = store.load_manifest()
                     manifest["started_at"] = datetime.datetime.now().isoformat()
                     manifest["provider"] = config.provider.value
                     manifest["model"] = config.model_name
-                    if seed is not None: manifest["seed"] = seed
-                    if max_papers is not None: manifest["max_papers"] = max_papers
-                    if time_window_start is not None: manifest["time_window_start"] = time_window_start
-                    if time_window_end is not None: manifest["time_window_end"] = time_window_end
+                    if seed is not None:
+                        manifest["seed"] = seed
+                    if max_papers is not None:
+                        manifest["max_papers"] = max_papers
+                    if time_window_start is not None:
+                        manifest["time_window_start"] = time_window_start
+                    if time_window_end is not None:
+                        manifest["time_window_end"] = time_window_end
                     store.save_manifest(manifest)
 
                 orchestrator = Orchestrator(topic=topic, config=config, store=store, task_id=run_id)
@@ -297,16 +309,16 @@ class RunManager(ResearchService):
                                 m["updated_at"] = datetime.datetime.now().isoformat()
                                 store.save_manifest(m)
                     asyncio.run_coroutine_threadsafe(_update_state(), loop)
-                        
+
                 orchestrator.on_state_change = state_cb
-                
+
                 result = await asyncio.to_thread(orchestrator.run)
-                
+
                 async with self._get_lock(run_id):
                     manifest = store.load_manifest()
                     if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
                         return
-                        
+
                     manifest.update({
                         "final_state": result.final_state,
                         "success": result.success,
@@ -334,7 +346,7 @@ class RunManager(ResearchService):
                     "finished_at": datetime.datetime.now().isoformat()
                 })
                 store.save_manifest(manifest)
-        except Exception as e:
+        except Exception:
             from traceback import format_exc
             log_error(f"Worker failure for run {run_id}: {format_exc()}")
             try:
@@ -343,7 +355,7 @@ class RunManager(ResearchService):
                     manifest = store.load_manifest()
                     if manifest.get("halt_code") == HaltCode.INTERRUPTED.value:
                         return
-                        
+
                     manifest.update({
                         "final_state": OrchestratorState.HALTED.name,
                         "success": False,
@@ -362,12 +374,12 @@ class RunManager(ResearchService):
 
     async def get_status(self, run_id: str) -> RunStatus:
         store = self._open_existing_store(run_id)
-            
+
         manifest = store.load_manifest()
-        
+
         success = manifest.get("success", False)
         terminal = "final_state" in manifest
-        
+
         return RunStatus(
             run_id=run_id,
             topic=manifest.get("topic", "Unknown"),
@@ -395,23 +407,24 @@ class RunManager(ResearchService):
             if "final_state" not in manifest:
                 manifest["cancellation_requested"] = True
                 store.save_manifest(manifest)
-                
+
                 if run_id in self._cancellation_tokens:
                     self._cancellation_tokens[run_id].cancel()
-                
+
+        # Status read is outside the lock to avoid holding lock during read
         return await self.get_status(run_id)
 
     async def get_result(self, run_id: str) -> ResearchResult:
         store = self._open_existing_store(run_id)
-            
+
         manifest = store.load_manifest()
         if "final_state" not in manifest:
             raise ValueError("RUN_NOT_READY")
-            
+
         review = store.load_review_result()
         review_passed = review.passed if review else None
         warnings = review.issues if review and not review.passed else []
-        
+
         return ResearchResult(
             run_id=run_id,
             final_state=manifest["final_state"],
@@ -435,10 +448,11 @@ class RunManager(ResearchService):
         created_after: Optional[str] = None,
         limit: int = 50,
     ) -> list[RunSummary]:
+        """List runs. This is a read-only operation that never mutates storage."""
         runs_dir = self.data_dir / "runs"
         if not runs_dir.exists():
             return []
-            
+
         results = []
         for run_id in os.listdir(runs_dir):
             try:
@@ -453,14 +467,17 @@ class RunManager(ResearchService):
                     created_at=None
                 ))
                 continue
+            except ValueError:
+                # UNKNOWN_RUN or INVALID_RUN_ID: skip non-run directories
+                continue
             except Exception:
                 continue
-                
+
             if not manifest:
                 continue
-                
+
             current_status = manifest.get("final_state", "ACTIVE")
-            
+
             if status and current_status != status:
                 continue
             if provider and manifest.get("provider") != provider:
@@ -469,7 +486,7 @@ class RunManager(ResearchService):
                 continue
             if created_after and manifest.get("created_at", "") < created_after:
                 continue
-                
+
             results.append(RunSummary(
                 run_id=run_id,
                 topic=manifest.get("topic", "Unknown"),
@@ -477,13 +494,13 @@ class RunManager(ResearchService):
                 status=current_status,
                 created_at=manifest.get("created_at")
             ))
-            
+
         results.sort(key=lambda x: x.created_at or "", reverse=True)
         return results[:limit]
 
     async def list_artifacts(self, run_id: str) -> list[ArtifactMetadata]:
         store = self._open_existing_store(run_id)
-            
+
         manifest = store.load_manifest()
         artifacts = []
         for name, path_str in manifest.get("artifact_paths", {}).items():
@@ -506,28 +523,28 @@ class RunManager(ResearchService):
 
     async def read_public_resource(self, run_id: str, resource_name: str) -> bytes:
         PUBLIC_FILES = {
-            "manifest.json", "research_plan.md", "papers.json", 
-            "claims.json", "gaps.json", "directions.json", 
+            "manifest.json", "research_plan.md", "papers.json",
+            "claims.json", "gaps.json", "directions.json",
             "coverage.json", "review.json"
         }
         if resource_name not in PUBLIC_FILES:
             raise ValueError("RESOURCE_NOT_FOUND")
-            
+
         store = self._open_existing_store(run_id)
-            
+
         target_path = (store.directory / resource_name).resolve()
-        
+
         try:
             target_path.relative_to(store.directory.resolve())
         except ValueError:
             raise ValueError("INVALID_ARGUMENT")
-            
+
         if not target_path.exists() or not target_path.is_file():
             raise ValueError("RESOURCE_NOT_FOUND")
-            
+
         if target_path.stat().st_size > self.max_result_bytes:
             raise ValueError("ARTIFACT_TOO_LARGE")
-            
+
         if resource_name == "manifest.json":
             manifest = store.load_manifest()
             PUBLIC_MANIFEST_FIELDS = {
@@ -543,49 +560,49 @@ class RunManager(ResearchService):
                 safe_manifest["artifact_paths"] = {k: Path(v).name for k, v in manifest["artifact_paths"].items()}
             import json
             return json.dumps(safe_manifest, indent=2).encode('utf-8')
-                
+
         return target_path.read_bytes()
 
     async def read_generated_artifact(self, run_id: str, artifact_name: str) -> bytes:
         store = self._open_existing_store(run_id)
-            
+
         manifest = store.load_manifest()
         paths = manifest.get("artifact_paths", {})
-        
+
         target_path = None
         for name, path_str in paths.items():
             if Path(path_str).name == artifact_name:
                 target_path = Path(path_str).resolve()
                 break
-                
+
         if not target_path:
             raise ValueError("RESOURCE_NOT_FOUND")
-            
+
         try:
             target_path.relative_to(store.directory.resolve())
         except ValueError:
             raise ValueError("INVALID_ARGUMENT")
-            
+
         if not target_path.exists() or not target_path.is_file():
             raise ValueError("RESOURCE_NOT_FOUND")
-            
+
         if target_path.stat().st_size > self.max_result_bytes:
             raise ValueError("ARTIFACT_TOO_LARGE")
-                
+
         return target_path.read_bytes()
 
     async def shutdown(self, grace_period: float = 5.0):
         self.shutting_down = True
-        
+
         # 1. Signal cancellation tokens
         for token in self._cancellation_tokens.values():
             token.cancel()
-        
+
         # 2. Wait for tasks to complete cooperatively
         tasks = list(self._tasks.values())
         if tasks:
             await asyncio.wait(tasks, timeout=grace_period)
-            
+
         # 3. Persist interrupted runs
         for run_id in list(self._active_runs):
             async with self._get_lock(run_id):

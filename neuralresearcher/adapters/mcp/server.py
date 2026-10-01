@@ -1,15 +1,15 @@
 import asyncio
 import logging
-from typing import Optional
 
 from mcp.server.mcpserver import MCPServer
 
 from neuralresearcher.adapters.mcp.config import MCPSettings
-from neuralresearcher.application.run_manager import RunManager
-from neuralresearcher.adapters.mcp.tools import register_tools
-from neuralresearcher.adapters.mcp.resources import register_resources
 from neuralresearcher.adapters.mcp.prompts import register_prompts
+from neuralresearcher.adapters.mcp.resources import register_resources
 from neuralresearcher.adapters.mcp.security import BearerAuthMiddleware
+from neuralresearcher.adapters.mcp.tools import register_tools
+from neuralresearcher.application.run_manager import RunManager
+
 
 def create_mcp_server(
     service: RunManager,
@@ -33,9 +33,8 @@ def start_mcp_server(
     port: int | None = None,
     path: str | None = None,
 ):
-    import os
     from neuralresearcher.logging import configure_console
-    
+
     overrides = {
         key: value
         for key, value in {
@@ -48,17 +47,17 @@ def start_mcp_server(
     }
     from typing import Any, cast
     settings = MCPSettings(**cast(dict[str, Any], overrides))
-    
+
     if settings.transport == "stdio":
         configure_console(stderr=True)
-    
+
     # Configure logging
     log_level_name = settings.log_level.upper()
     logging.basicConfig(
         level=getattr(logging, log_level_name, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    
+
     service = RunManager(
         data_dir=settings.data_dir,
         max_concurrent_runs=settings.max_concurrent_runs,
@@ -78,15 +77,15 @@ def start_mcp_server(
     elif settings.transport == "streamable-http":
         import uvicorn
         from starlette.applications import Starlette
-        from starlette.routing import Mount, Route
-        
+        from starlette.routing import Mount
+
         # Check authentication constraint
         if settings.host != "127.0.0.1" and not settings.auth_token:
             raise RuntimeError("Authentication must be configured when binding to a non-loopback interface.")
-            
+
         mcp_app = server.streamable_http_app()
         original_lifespan = mcp_app.router.lifespan_context
-        
+
         @contextlib.asynccontextmanager
         async def app_lifespan(app_instance):
             async with original_lifespan(app_instance):
@@ -96,17 +95,17 @@ def start_mcp_server(
         mount_path = settings.path
         if not mount_path.startswith("/"):
             mount_path = f"/{mount_path}"
-            
+
         app = Starlette(
             routes=[
                 Mount(mount_path, app=mcp_app),
             ],
             lifespan=app_lifespan,
         )
-        
+
         if settings.auth_token:
             app.add_middleware(BearerAuthMiddleware, auth_token=settings.auth_token)
-            
+
         uvicorn.run(app, host=settings.host, port=settings.port)
     else:
         raise ValueError(f"Unknown transport: {settings.transport}")

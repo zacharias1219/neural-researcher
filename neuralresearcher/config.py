@@ -1,6 +1,7 @@
 import os
 from enum import Enum
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
 from neuralresearcher.errors import ConfigError
@@ -51,7 +52,7 @@ class Config(BaseModel):
     top_p: float = 1.0
     max_tokens: int = 4096
     seed: int | None = None
-    
+
     # Guardrail knobs
     min_papers: int = 3
     max_papers: int = Field(default=5, ge=1, le=100)

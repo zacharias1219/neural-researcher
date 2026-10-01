@@ -1,17 +1,18 @@
 import json
+
 from neuralresearcher.context import AgentContext
-from neuralresearcher.llm import call_llm
-from neuralresearcher.tools import TOOL_SCHEMAS, execute_tool_call
-from neuralresearcher.state import Paper
 from neuralresearcher.errors import ToolError, WorkflowError
+from neuralresearcher.llm import call_llm
 from neuralresearcher.logging import log_error
+from neuralresearcher.state import Paper
+from neuralresearcher.tools import TOOL_SCHEMAS, execute_tool_call
 
 
 def run_retrieval(context: AgentContext) -> None:
     topic_spec = context.store.load_topic_spec()
     if not topic_spec:
         raise WorkflowError("TopicSpec not found in store.")
-        
+
     system_prompt = "You are a retrieval agent. Use the search_papers tool to find papers."
     user_prompt = (
         f"Search for papers related to: {topic_spec.raw_topic}. "
@@ -19,12 +20,12 @@ def run_retrieval(context: AgentContext) -> None:
         "Pass a list of 2 or 3 core keywords to the search_papers tool (e.g. ['mamba', 'optimization']). "
         "Do NOT pass long sentences or many words, as it will break the search."
     )
-    
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    
+
     response = call_llm(
         config=context.config,
         messages=messages,
@@ -33,7 +34,7 @@ def run_retrieval(context: AgentContext) -> None:
         task_id=context.task_id,
         agent_name="retrieval"
     )
-    
+
     papers_data = []
     if response.tool_calls:
         for tc in response.tool_calls:
@@ -42,11 +43,11 @@ def run_retrieval(context: AgentContext) -> None:
                 papers_data.extend(json.loads(result_json))
             except ToolError as e:
                 log_error(str(e))
-                
+
     papers = []
     start_year = topic_spec.time_window.get("start_year") if topic_spec.time_window else None
     end_year = topic_spec.time_window.get("end_year") if topic_spec.time_window else None
-    
+
     for p_data in papers_data:
         paper = Paper(
             id=p_data["id"],
@@ -59,5 +60,5 @@ def run_retrieval(context: AgentContext) -> None:
         )
         if (start_year is None or paper.year >= start_year) and (end_year is None or paper.year <= end_year):
             papers.append(paper)
-        
+
     context.store.save_papers(papers)

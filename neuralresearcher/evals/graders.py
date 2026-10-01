@@ -8,26 +8,26 @@ def grade_completion(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
     expect_halt = task.success_criteria.get("expect_halt", False)
     expected_halt_code = task.success_criteria.get("expected_halt_code")
     expected_failed_stage = task.success_criteria.get("expected_failed_stage")
-    
+
     if expect_halt:
         if orchestrator.state == OrchestratorState.HALTED:
             # Check halt code and stage if specified
             manifest = orchestrator.store.load_manifest()
             actual_halt_code = manifest.get("halt_code")
             actual_failed_stage = manifest.get("failed_stage")
-            
+
             if expected_halt_code and actual_halt_code != expected_halt_code:
                 return Outcome(score=0.0, passed=False, details=f"Expected halt code {expected_halt_code}, got {actual_halt_code}")
             if expected_failed_stage and actual_failed_stage != expected_failed_stage:
                 return Outcome(score=0.0, passed=False, details=f"Expected failed stage {expected_failed_stage}, got {actual_failed_stage}")
-                
+
             return Outcome(score=1.0, passed=True, details="Halted as expected for negative task")
         else:
             return Outcome(score=0.0, passed=False, details=f"Expected HALTED, got {orchestrator.state}")
-    
+
     if orchestrator.state == OrchestratorState.REPORT_READY:
         return Outcome(score=1.0, passed=True, details="Reached REPORT_READY")
-    
+
     # Fractional score for partial pipeline progress
     pipeline_order = [
         OrchestratorState.INIT,
@@ -69,7 +69,7 @@ def grade_correctness(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
                 return Outcome(score=0.0, passed=False, details=f"Correctly halted but wrong stage: got {actual_failed_stage}")
             return Outcome(score=1.0, passed=True, details="Halted as expected for negative task")
         return Outcome(score=0.0, passed=False, details=f"Negative task failed to halt (got {orchestrator.state})")
-        
+
     papers = orchestrator.store.load_papers()
     gaps = orchestrator.store.load_gaps()
     plan, steps = orchestrator.store.load_plan()
@@ -116,7 +116,7 @@ def grade_correctness(orchestrator: Orchestrator, task: EvalTask) -> Outcome:
         if plan_file.exists():
             with open(plan_file, "r", encoding="utf-8") as f:
                 plan_text = f.read()
-                
+
         if plan_text and required_keyword.lower() in plan_text.lower():
             criteria_scores.append(1.0)
         else:
@@ -147,9 +147,9 @@ def grade_efficiency(
     """Grade trial efficiency against latency and token bounds."""
     dur_score = 1.0 if duration_sec <= max_duration_sec else max(0.0, 1.0 - (duration_sec - max_duration_sec) / max_duration_sec)
     tok_score = 1.0 if total_tokens <= max_tokens else max(0.0, 1.0 - (total_tokens - max_tokens) / max_tokens)
-    
+
     efficiency_score = round((dur_score + tok_score) / 2.0, 2)
     passed = duration_sec <= max_duration_sec and total_tokens <= max_tokens
-    
+
     details = f"Duration: {duration_sec:.1f}s (max {max_duration_sec}s), Tokens: {total_tokens} (max {max_tokens})"
     return Outcome(score=efficiency_score, passed=passed, details=details)

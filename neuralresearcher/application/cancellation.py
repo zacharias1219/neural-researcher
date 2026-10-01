@@ -1,9 +1,10 @@
 import asyncio
 from typing import Callable
 
+
 class CancellationToken:
     def __init__(self):
-        self._is_cancelled = False
+        self._is_cancelled: bool = False
         self._callbacks: list[Callable[[], None]] = []
 
     @property

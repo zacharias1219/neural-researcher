@@ -1,9 +1,6 @@
 from typing import List, Optional
 
-from neuralresearcher.state import (
-    ResearchPlan, PlanStep, Paper, Gap, Direction,
-    Claim, CoverageReport, ReviewResult
-)
+from neuralresearcher.state import Claim, CoverageReport, Direction, Gap, Paper, PlanStep, ResearchPlan, ReviewResult
 
 
 def render_markdown_plan(
@@ -19,7 +16,7 @@ def render_markdown_plan(
 ) -> None:
     claims = claims or []
     lines = []
-    
+
     # ================================================================
     # Section 1: Overview
     # ================================================================
@@ -35,7 +32,7 @@ def render_markdown_plan(
     if plan.timeline_weeks > 0:
         lines.append(f"**Estimated Timeline:** {plan.timeline_weeks} weeks")
     lines.append("")
-    
+
     from neuralresearcher.state import ContentLevel
     abstract_only_count = sum(1 for p in papers if getattr(p, "content_level", None) == ContentLevel.ABSTRACT_ONLY)
     if abstract_only_count == len(papers) and len(papers) > 0:
@@ -44,17 +41,17 @@ def render_markdown_plan(
     elif abstract_only_count > 0:
         lines.append(f"> ⚠️ **WARNING**: {abstract_only_count} out of {len(papers)} papers in this report were analyzed using only their abstracts.")
         lines.append("")
-        
+
     if review_result and not review_result.passed:
         lines.append("> ⚠️ **WARNING**: The reviewer rejected this plan due to logical flaws or unsupported claims. (This run completed in non-strict mode.)")
         lines.append("")
-    
+
     # ================================================================
     # Section 2: Field Summary
     # ================================================================
     lines.append("## 2. Field Summary")
     lines.append("")
-    
+
     if coverage_report and coverage_report.clusters:
         for cluster in coverage_report.clusters:
             if cluster.domain == "uncategorized":
@@ -73,23 +70,23 @@ def render_markdown_plan(
             methods_str = ", ".join(p.methods) if p.methods else "—"
             lines.append(f"- **{p.title}** ({p.year}): {methods_str}")
         lines.append("")
-    
+
     # ================================================================
     # Section 3: Gap Analysis
     # ================================================================
     lines.append("## 3. Gap Analysis")
     lines.append("")
-    
+
     # Primary gaps
     primary_gaps = [g for g in gaps if g.id in plan.primary_gap_ids]
     other_gaps = [g for g in gaps if g.id not in plan.primary_gap_ids]
-    
+
     if primary_gaps:
         lines.append("### Primary Gaps Addressed")
         lines.append("")
         for gap in primary_gaps:
             _render_gap(lines, gap, papers, claims)
-    
+
     # Coverage warnings
     if coverage_report and coverage_report.warnings:
         lines.append("### Coverage Warnings")
@@ -97,18 +94,18 @@ def render_markdown_plan(
         for w in coverage_report.warnings:
             lines.append(f"- ⚠️ {w}")
         lines.append("")
-    
+
     # ================================================================
     # Section 4: Experiment Design
     # ================================================================
     lines.append("## 4. Experiment Design")
     lines.append("")
-    
+
     # Extract datasets from data-phase steps
     data_steps = [s for s in steps if s.type == "data"]
     experiment_steps = [s for s in steps if s.type == "experiment"]
     impl_steps = [s for s in steps if s.type == "implementation"]
-    
+
     if data_steps:
         lines.append("### Datasets")
         lines.append("")
@@ -116,7 +113,7 @@ def render_markdown_plan(
             outputs_str = ", ".join(step.outputs) if step.outputs else "—"
             lines.append(f"- **{step.label}**: {outputs_str}")
         lines.append("")
-    
+
     if impl_steps:
         lines.append("### Model Configurations")
         lines.append("")
@@ -125,7 +122,7 @@ def render_markdown_plan(
             if step.description:
                 lines.append(f"  - {step.description}")
         lines.append("")
-    
+
     if experiment_steps:
         lines.append("### Experiments & Baselines")
         lines.append("")
@@ -138,7 +135,7 @@ def render_markdown_plan(
             if step.metrics:
                 lines.append(f"  - Metrics: {', '.join(step.metrics)}")
         lines.append("")
-    
+
     # Evaluation metrics (from papers)
     all_metrics = set()
     for p in papers:
@@ -149,7 +146,7 @@ def render_markdown_plan(
         for m in sorted(all_metrics):
             lines.append(f"- {m}")
         lines.append("")
-    
+
     # Hardware assumptions (from step assumptions)
     hw_assumptions = set()
     for step in steps:
@@ -162,13 +159,13 @@ def render_markdown_plan(
         for a in sorted(hw_assumptions):
             lines.append(f"- {a}")
         lines.append("")
-    
+
     # ================================================================
     # Section 5: Standard Operating Procedure (SOP)
     # ================================================================
     lines.append("## 5. Standard Operating Procedure (SOP)")
     lines.append("")
-    
+
     phases = ["data", "implementation", "experiment", "ablation", "analysis", "writing"]
     for phase in phases:
         phase_steps = [s for s in steps if s.type == phase]
@@ -190,32 +187,32 @@ def render_markdown_plan(
                 lines.append(f"| **Outputs** | {', '.join(step.outputs) if step.outputs else 'None'} |")
                 if step.metrics:
                     lines.append(f"| **Metrics** | {', '.join(step.metrics)} |")
-                
+
                 compute_h = step.estimated_cost.get("compute_hours", 0.0)
                 human_h = step.estimated_cost.get("human_hours", 0.0)
                 lines.append(f"| **Compute Hours** | {compute_h} |")
                 lines.append(f"| **Human Hours** | {human_h} |")
-                
+
                 if step.assumptions:
                     lines.append(f"| **Assumptions** | {'; '.join(step.assumptions)} |")
-                
+
                 lines.append("")
-    
+
     # ================================================================
     # Section 6: Timeline & Resources
     # ================================================================
     lines.append("## 6. Timeline & Resources")
     lines.append("")
-    
+
     total_compute = plan.resource_summary.get("total_compute_hours", 0.0)
     total_human = plan.resource_summary.get("total_human_hours", 0.0)
-    
+
     lines.append(f"**Total Compute Hours:** {total_compute:.1f}")
     lines.append(f"**Total Human Hours:** {total_human:.1f}")
     if plan.timeline_weeks > 0:
         lines.append(f"**Estimated Duration:** {plan.timeline_weeks} weeks")
     lines.append("")
-    
+
     # Per-phase breakdown
     lines.append("### Per-Phase Cost Breakdown")
     lines.append("")
@@ -228,13 +225,13 @@ def render_markdown_plan(
             p_human = sum(s.estimated_cost.get("human_hours", 0.0) for s in phase_steps)
             lines.append(f"| {phase.capitalize()} | {len(phase_steps)} | {p_compute:.1f} | {p_human:.1f} |")
     lines.append("")
-    
+
     # ================================================================
     # Section 7: Manuscript Outline
     # ================================================================
     lines.append("## 7. Manuscript Outline")
     lines.append("")
-    
+
     writing_steps = [s for s in steps if s.type == "writing"]
     if writing_steps:
         for step in writing_steps:
@@ -251,25 +248,25 @@ def render_markdown_plan(
         lines.append("- Discussion and Future Work")
         lines.append("- Conclusion")
     lines.append("")
-    
+
     # ================================================================
     # Section 8: Review Summary
     # ================================================================
     lines.append("## 8. Review Summary")
     lines.append("")
-    
+
     if review_result:
         status_str = "✅ PASSED" if review_result.passed else "❌ FAILED"
         lines.append(f"**Status:** {status_str}")
         lines.append("")
-        
+
         if review_result.issues:
             lines.append("### Issues")
             lines.append("")
             for issue in review_result.issues:
                 lines.append(f"- ✗ {issue}")
             lines.append("")
-        
+
         if review_result.suggestions:
             lines.append("### Suggestions")
             lines.append("")
@@ -279,13 +276,13 @@ def render_markdown_plan(
     else:
         lines.append("*No review has been performed yet.*")
         lines.append("")
-    
+
     # ================================================================
     # Section 9: Key Literature References
     # ================================================================
     lines.append("## 9. Key Literature References")
     lines.append("")
-    
+
     if coverage_report and coverage_report.clusters:
         # Group references by domain cluster
         for cluster in coverage_report.clusters:
@@ -304,10 +301,10 @@ def render_markdown_plan(
                     f"  {p.url}"
                 )
             lines.append("")
-        
+
         # Handle uncategorized papers
-        uncategorized = [p for p in papers if p.id in 
-                         [pid for c in coverage_report.clusters 
+        uncategorized = [p for p in papers if p.id in
+                         [pid for c in coverage_report.clusters
                           if c.domain == "uncategorized" for pid in c.paper_ids]]
         if uncategorized:
             lines.append("### Other")
@@ -323,7 +320,7 @@ def render_markdown_plan(
             lines.append(f"- {paper.title} ({paper.year}, {paper.venue}){methods_str}{datasets_str}")
             lines.append(f"  {paper.url}")
         lines.append("")
-    
+
     # ================================================================
     # Section 10: Future Projects (Alternative Directions)
     # ================================================================
@@ -335,7 +332,7 @@ def render_markdown_plan(
         lines.append("")
         for gap in other_gaps:
             _render_gap(lines, gap, papers, claims)
-            
+
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
@@ -352,7 +349,7 @@ def _render_gap(
     lines.append(f"- **Novelty:** {gap.novelty_estimate}")
     if gap.feasibility_notes:
         lines.append(f"- **Feasibility:** {gap.feasibility_notes}")
-    
+
     # Related papers
     if gap.related_papers:
         related = [p for p in papers if p.id in gap.related_papers]
@@ -360,7 +357,7 @@ def _render_gap(
             lines.append("- **Related Papers:**")
             for p in related:
                 lines.append(f"  - {p.title} ({p.year})")
-    
+
     # Supporting claims
     if gap.supporting_claims:
         supporting = [c for c in claims if c.id in gap.supporting_claims]
@@ -368,7 +365,7 @@ def _render_gap(
             lines.append("- **Supporting Claims:**")
             for c in supporting:
                 lines.append(f"  - [{c.type}] {c.text}")
-    
+
     # Dimensions table
     if gap.dimensions:
         lines.append("- **Dimensions:**")
@@ -377,5 +374,5 @@ def _render_gap(
         lines.append("  |-----------|-------|")
         for dim, val in gap.dimensions.items():
             lines.append(f"  | {dim} | {val} |")
-    
+
     lines.append("")

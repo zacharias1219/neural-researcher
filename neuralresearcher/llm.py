@@ -6,19 +6,16 @@ Each provider's SDK differences are handled here so the rest of the
 codebase can keep calling ``call_llm`` with a uniform interface.
 """
 
-from typing import List, Dict, Any, Literal, Optional
-from pydantic import BaseModel
+import json
+import os
+import random
+import time
+from typing import Any, Dict, List, Literal, Optional, Protocol, Type, TypeVar
+
+from pydantic import BaseModel, ValidationError
 
 from neuralresearcher.config import Config, LLMProvider
-import os
-import time
-import json
-import random
-from typing import Protocol, TypeVar, Type
-from pydantic import ValidationError
-
 from neuralresearcher.errors import LLMError, SchemaError
-
 
 # ---------------------------------------------------------------------------
 # Shared response models (provider-agnostic)
@@ -74,7 +71,7 @@ class OpenAICompatibleAdapter:
     def __init__(self, provider: LLMProvider):
         self.provider = provider
         self._capabilities = self._init_capabilities()
-        
+
     def _init_capabilities(self) -> ProviderCapabilities:
         if self.provider == LLMProvider.GROQ:
             return ProviderCapabilities(supports_json_schema=False, max_output_tokens=8192)
@@ -85,7 +82,7 @@ class OpenAICompatibleAdapter:
     @property
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
-        
+
     def get_client(self) -> Any:
         if self.provider not in _CLIENTS:
             if self.provider == LLMProvider.GROQ:
@@ -184,7 +181,7 @@ class AnthropicAdapter:
     @property
     def capabilities(self) -> ProviderCapabilities:
         return self._capabilities
-        
+
     def get_client(self) -> Any:
         if self.provider not in _CLIENTS:
             from anthropic import Anthropic
@@ -345,7 +342,7 @@ def generate_structured(
 ) -> T:
     schema = output_model.model_json_schema()
     name = schema.get("title", "structured_output").lower()
-    
+
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -354,9 +351,9 @@ def generate_structured(
             "strict": True
         }
     }
-    
+
     system_prompt_addition = f"\n\nIMPORTANT: You must return a JSON object matching this schema:\n{json.dumps(schema, indent=2)}"
-    
+
     # Inject schema into system prompt to assist fallback modes
     modified_messages = [dict(msg) for msg in messages]
     for msg in modified_messages:
@@ -365,7 +362,7 @@ def generate_structured(
             break
     else:
         modified_messages.insert(0, {"role": "system", "content": system_prompt_addition})
-        
+
     last_error = None
     for attempt in range(config.schema_repair_attempts + 1):
         try:
@@ -394,6 +391,6 @@ def generate_structured(
         except Exception as e:
             last_error = e
             raise SchemaError(f"Unexpected error during structured generation: {str(e)}")
-            
+
     raise SchemaError(f"Exhausted {config.schema_repair_attempts} schema repair attempts. Last error: {str(last_error)}")
 
