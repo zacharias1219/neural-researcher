@@ -5,7 +5,7 @@ import sys
 try:
     from mcp.server.mcpserver import MCPServer
 except ImportError:
-    MCPServer = None
+    MCPServer = None  # type: ignore
 
 from neuralresearcher.adapters.mcp.config import MCPSettings
 from neuralresearcher.adapters.mcp.prompts import register_prompts

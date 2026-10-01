@@ -242,7 +242,11 @@ During server shutdown:
 ## Evaluation Harness
 
 ```bash
-neuralresearcher-evals run-suite --suite-name core --providers openai,anthropic
+# Run the evaluation suite with the default provider (Groq)
+neuralresearcher-evals run-suite --suite-name core --providers groq
+
+# Or evaluate across multiple providers
+neuralresearcher-evals run-suite --suite-name core --providers groq,openai,anthropic
 ```
 
 The eval harness runs predefined tasks across providers and grades on completion, correctness, and efficiency. Results are saved to `research/evals/eval_results.json`.
@@ -301,15 +305,21 @@ python -m build
 python -m venv venv-verify
 venv-verify/Scripts/activate  # Windows
 # or: source venv-verify/bin/activate  # Unix
-pip install dist/neuralresearcher-0.1.0-py3-none-any.whl
-pip install "dist/neuralresearcher-0.1.0-py3-none-any.whl[mcp]"
 
-# Verify
+# Install local wheel
+pip install dist/neuralresearcher-0.1.0-py3-none-any.whl
+# Then optionally install MCP dependencies
+pip install "neuralresearcher[mcp]"
+# (Alternatively, test extras from source: pip install ".[mcp]")
+
+# Verify CLI
 neuralresearcher --help
 neuralresearcher version
 neuralresearcher providers
-neuralresearcher-evals --help
 
+# Verify MCP transport
+neuralresearcher-mcp --help
+# See RELEASE.md for the full release checklist, including stdio and HTTP smoke tests.
 # Publish to TestPyPI
 python -m twine upload --repository testpypi dist/*
 
