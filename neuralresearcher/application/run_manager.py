@@ -50,7 +50,9 @@ class RunManager(ResearchService):
         
         for run_id in os.listdir(runs_dir):
             try:
-                store = StateStore(directory=str(self.data_dir), run_id=run_id)
+                store = StateStore(directory=str(self.data_dir), run_id=run_id, create=False)
+                if not store.directory.is_dir() or not store.manifest_file.is_file():
+                    continue
                 manifest = store.load_manifest()
                 if not manifest:
                     continue
@@ -87,14 +89,8 @@ class RunManager(ResearchService):
         if not store.directory.is_dir() or not store.manifest_file.is_file():
             raise ValueError("UNKNOWN_RUN")
         
-        try:
-            manifest = store.load_manifest()
-            if not manifest:
-                raise ValueError("UNKNOWN_RUN")
-        except StateCorruptionError:
-            raise
-        except Exception:
-            # Catch any others
+        manifest = store.load_manifest()
+        if not manifest:
             raise ValueError("UNKNOWN_RUN")
             
         return store
